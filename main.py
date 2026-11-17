@@ -267,19 +267,36 @@ class ProductivityApp(tk.Tk):
     # ---------------------------------------------------------- ажилтан: компьютерийн идэвх
     def build_activity(self, frame):
         ttk.Label(frame, wraplength=700, text="Хэмжилт зөвхөн «Хэмжилт эхлэх» дарсны дараа, зөвшөөрөлтэйгээр "
-                  "эхэлнэ. Урд талын програмын нэр, хугацааг л бүртгээд админ руу илгээнэ.").pack(anchor="w", pady=(0, 8))
+                  "эхэлнэ. Урд талын програм, танигдсан сайтын (YouTube, Facebook, Instagram, Gmail) нэр, "
+                  "хугацааг л бүртгээд админ руу илгээнэ.").pack(anchor="w", pady=(0, 8))
         buttons = row(frame)
         button(buttons, "Хэмжилт эхлэх", self.start_activity)
         button(buttons, "Түр зогсоох", self.pause_activity)
         button(buttons, "Дуусгах", self.finish_activity)
         self.activity_label = ttk.Label(frame, text="Хэмжилт эхлээгүй.", font=("Segoe UI", 12))
         self.activity_label.pack(pady=10)
+        self.usage_graph = tk.Canvas(frame, height=320, background="white")
+        self.usage_graph.pack(fill="both", expand=True)
+
+    def update_usage_graph(self, apps):
+        """Програм, сайт тус бүрийн хугацааг хэвтээ баганаар зурна (хамгийн их 8)."""
+        self.usage_graph.delete("all")
+        items = sorted(apps.items(), key=lambda item: item[1], reverse=True)[:8]
+        maximum = max((seconds for _, seconds in items), default=1)
+        for index, (name, seconds) in enumerate(items):
+            y = 18 + index * 36
+            self.usage_graph.create_text(8, y + 10, text=name, anchor="w")
+            width = 480 * seconds / maximum
+            self.usage_graph.create_rectangle(190, y, 190 + width, y + 20, fill="#4a90d9", outline="")
+            value = f"{seconds:.0f} сек" if seconds < 60 else f"{seconds / 60:.1f} мин"
+            self.usage_graph.create_text(680, y + 10, text=value, anchor="e")
 
     def start_activity(self):
         if self.tracker:                               # түр зогсоосон хэмжилтийг үргэлжлүүлнэ
             return self.tracker.resume()
         self.tracker = ActivityTracker()
         self.tracker.start()
+        self.update_usage_graph({})
 
     def pause_activity(self):
         if self.tracker:
@@ -291,6 +308,7 @@ class ProductivityApp(tk.Tk):
             return
         summary = self.tracker.stop()
         self.tracker = None
+        self.update_usage_graph(summary["apps"])
         try:
             reg.ask(self.host, {"action": "activity", "employee_id": self.me["id"], "summary": summary})
         except (OSError, ValueError) as error:
@@ -303,6 +321,7 @@ class ProductivityApp(tk.Tk):
         if self.tracker:
             info = self.tracker.tick()
             self.activity_label.config(text=f"{info['app'] or '—'} · {info['total_seconds']:.0f} сек")
+            self.update_usage_graph(self.tracker.apps)
 
     def on_close(self):
         if messagebox.askokcancel("Гарах", "Програмыг хаах уу?", parent=self):
