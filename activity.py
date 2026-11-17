@@ -3,6 +3,8 @@ import ctypes
 import os
 import time
 
+SITES = ("YouTube", "Facebook", "Instagram", "Gmail")   # браузерын идэвхтэй табын гарчгаас танина
+
 
 def active_app():
     """Урд талын цонх аль програмынх болохыг Windows-оос асууна (жишээ нь Code.exe).
@@ -19,7 +21,7 @@ def active_app():
     title = ctypes.create_unicode_buffer(512)
     user32.GetWindowTextW(hwnd, title, len(title))
     title = title.value.casefold()
-    for site in ("YouTube", "Facebook", "Instagram", "Gmail"):
+    for site in SITES:
         if site.casefold() in title:
             return f"{app} - {site}"
     return app

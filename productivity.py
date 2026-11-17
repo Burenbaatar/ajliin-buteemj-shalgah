@@ -1,23 +1,25 @@
-"""5-р гишүүн — гүйцэтгэлийн хувь ба тайлан."""
-import time
+"""5-р гишүүн — идэвхийн хураангуй: програм, сайт тус бүрт зарцуулсан хугацаа."""
+from activity import SITES
 
 
-def calculate_completion(target, completed):
-    if target <= 0 or not 0 <= completed <= target:
-        raise ValueError("Гүйцэтгэл 0-ээс төлөвлөсөн тоо хүртэл байна.")
-    return round(completed / target * 100, 1)
+def total_apps(summaries):
+    """Олон хэмжилтийн програм, сайтын хугацааг нэгтгэнэ: {"Code.exe": 60.0, "chrome.exe - YouTube": 30.0}."""
+    apps = {}
+    for summary in summaries:
+        for name, seconds in summary.get("apps", {}).items():
+            apps[name] = apps.get(name, 0) + seconds
+    return apps
 
 
-def build_report(employee, activity_summary):
-    return {"name": employee["name"], "target": employee["target"], "completed": employee["completed"],
-            "completion_rate": calculate_completion(employee["target"], employee["completed"]),
-            "activity_seconds": activity_summary.get("total_seconds", 0),
-            "date": time.strftime("%Y-%m-%d %H:%M")}
+def site_times(apps):
+    """4 сайт тус бүрийн нийт хугацаа: {"YouTube": 30.0, "Facebook": 0, ...}."""
+    return {site: sum(seconds for name, seconds in apps.items() if name.endswith(" - " + site)) for site in SITES}
 
 
-def report_text(report):
-    return (f"Ажилтан: {report['name']}\n"
-            f"Даалгавар: {report['completed']} / {report['target']}\n"
-            f"Биелэлт: {report['completion_rate']}%\n"
-            f"Идэвхтэй хугацаа: {report['activity_seconds']:.0f} сек\n"
-            f"Огноо: {report['date']}")
+def top_app(apps):
+    """Хамгийн их хугацаа зарцуулсан програм эсвэл сайт."""
+    return max(apps, key=apps.get) if apps else "—"
+
+
+def minutes(seconds):
+    return f"{seconds / 60:.1f} мин"

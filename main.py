@@ -10,7 +10,7 @@ import cv2
 
 import productivity as prod                 # 5-р гишүүн
 import register as reg                      # 2-р гишүүн
-from activity import ActivityTracker        # 4-р гишүүн
+from activity import SITES, ActivityTracker # 4-р гишүүн
 from camera import CameraService            # 3-р гишүүн
 
 BOLD = ("Segoe UI", 12, "bold")
@@ -67,12 +67,13 @@ class ProductivityApp(tk.Tk):
         form = row(self.login)
         self.host_entry = entry(form, "Админы компьютер:", 20)
         self.host_entry.insert(0, "127.0.0.1")
-        button(form, "Холбогдох", self.connect)
         form = row(self.login)
-        ttk.Label(form, text="Нэр:").pack(side="left")
-        self.login_combo = ttk.Combobox(form, state="readonly", width=25)
-        self.login_combo.pack(side="left", padx=4)
+        self.login_name = entry(form, "Нэр:", 20)
+        self.login_code = entry(form, "Код:", 10)
+        self.login_code.config(show="*")
         button(form, "Нэвтрэх", self.open_employee)
+        ttk.Label(self.login, foreground="gray", text="Нэр, кодыг админ бүртгэхдээ өгнө. Админы програм "
+                  "асаалттай байх ёстой.").pack(anchor="w")
         ttk.Label(self.login, text="Админ", font=BOLD).pack(anchor="w", pady=(24, 6))
         form = row(self.login)
         self.password_entry = entry(form, "Нууц үг:", 20)
@@ -80,16 +81,6 @@ class ProductivityApp(tk.Tk):
         button(form, "Админаар нэвтрэх", self.open_admin)
         ttk.Label(self.login, foreground="gray", text="Анх нэвтрэхэд оруулсан нууц үг админы нууц үг болно.").pack(
             anchor="w")
-
-    def connect(self):
-        """Админы серверээс ажилтнуудын нэрсийг авна."""
-        try:
-            self.people = reg.ask(self.host_entry.get().strip(), {"action": "employees"})["employees"]
-        except (OSError, ValueError) as error:
-            return self.show_error(f"Админы компьютертэй холбогдсонгүй: {error}")
-        self.login_combo["values"] = [person["name"] for person in self.people]
-        if self.people:
-            self.login_combo.current(0)
 
     def open_tabs(self, title, pages):
         """Нэвтрэх хэсгийг хаагаад тухайн эрхийн табуудыг нээнэ."""
@@ -106,11 +97,15 @@ class ProductivityApp(tk.Tk):
         return top
 
     def open_employee(self):
-        index = self.login_combo.current()
-        if index < 0:
-            return self.show_error("Эхлээд «Холбогдох» дараад нэрээ сонгоно уу.")
-        self.me = self.people[index]
+        """Нэр, кодыг админы сервер шалгана. Зөв бол ажилтны табууд нээгдэнэ."""
         self.host = self.host_entry.get().strip()
+        request = {"action": "login", "name": self.login_name.get(), "code": self.login_code.get()}
+        try:
+            self.me = reg.ask(self.host, request)
+        except OSError:
+            return self.show_error("Админы компьютертэй холбогдсонгүй. Админ нэвтэрсэн эсэх, хаягийг шалгана уу.")
+        except ValueError as error:                    # нэр эсвэл код буруу
+            return self.show_error(error)
         self.open_tabs("Ажилтан: " + self.me["name"],
                        [("Камер", self.build_camera), ("Компьютерийн идэвх", self.build_activity)])
 
@@ -124,11 +119,7 @@ class ProductivityApp(tk.Tk):
             self.server = reg.start_server()
         except OSError:
             return self.show_error("Сервер асаж чадсангүй. Админы програм аль хэдийн нээлттэй байж магадгүй.")
-        top = self.open_tabs("Админ", [("Ажилтны бүртгэл", self.build_employee), ("Бүтээмж", self.build_productivity),
-                                       ("Ажлын бүтээмж", self.build_overview)])
-        ttk.Label(top, text="Ажилтан:").pack(side="left")
-        self.emp_combo = ttk.Combobox(top, state="readonly", width=30)
-        self.emp_combo.pack(side="left", padx=6)
+        self.open_tabs("Админ", [("Ажилтны бүртгэл", self.build_employee), ("Ажлын бүтээмж", self.build_overview)])
         self.refresh_employees()
         self.overview_loop()
         self.serve_loop()
@@ -139,39 +130,30 @@ class ProductivityApp(tk.Tk):
         reg.serve(self.server)
 
     # ---------------------------------------------------------- админ: ажилтны бүртгэл
-    def selected_employee(self):
-        index = self.emp_combo.current()
-        return self.employees[index] if index >= 0 else None
-
     def build_employee(self, frame):
         form = row(frame)
         self.name_entry = entry(form, "Нэр:", 22)
-        self.target_entry = entry(form, "Төлөвлөсөн даалгавар:", 6)
+        self.code_entry = entry(form, "Код:", 8)
         button(form, "Бүртгэх", self.add_employee_ui)
         button(form, "Жагсаалт шинэчлэх", self.refresh_employees)
         button(form, "Устгах", self.delete_selected_ui)
-        self.tree = table(frame, ("Нэр", "Төлөвлөсөн", "Дууссан"))
+        ttk.Label(frame, foreground="gray", text="Ажилтан нэр, кодоороо нэвтэрнэ. Байгаа нэрийг дахин бүртгэвэл "
+                  "код нь шинэчлэгдэнэ.").pack(anchor="w", pady=(0, 6))
+        self.tree = table(frame, ("Нэр", "Код"))
 
     def add_employee_ui(self):
-        target = self.target_entry.get()
-        if not target.isdigit():
-            return self.show_error("Төлөвлөсөн даалгаврыг тоогоор бичнэ үү.")
         try:
-            reg.add_employee(self.name_entry.get(), int(target))
+            reg.add_employee(self.name_entry.get(), self.code_entry.get())
         except (ValueError, OSError) as error:
             return self.show_error(error)
         self.name_entry.delete(0, "end")
-        self.target_entry.delete(0, "end")
+        self.code_entry.delete(0, "end")
         self.refresh_employees()
 
     def refresh_employees(self):
-        self.employees = reg.list_employees()
         self.tree.delete(*self.tree.get_children())
-        for emp in self.employees:
-            self.tree.insert("", "end", iid=emp["id"], values=(emp["name"], emp["target"], emp["completed"]))
-        self.emp_combo["values"] = [emp["name"] for emp in self.employees]
-        if self.emp_combo.current() < 0:               # сонгосон ажилтан байхгүй бол эхнийхийг сонгоно
-            self.emp_combo.set(self.employees[0]["name"] if self.employees else "")
+        for emp in reg.list_employees():
+            self.tree.insert("", "end", iid=emp["id"], values=(emp["name"], "байгаа" if emp.get("code") else "алга"))
         self.refresh_overview()
 
     def delete_selected_ui(self):
@@ -182,35 +164,11 @@ class ProductivityApp(tk.Tk):
             reg.delete_employee(employee_id)
             self.refresh_employees()
 
-    # ---------------------------------------------------------- админ: бүтээмж
-    def build_productivity(self, frame):
-        form = row(frame)
-        self.completed_entry = entry(form, "Гүйцэтгэсэн даалгавар:", 6)
-        button(form, "Хувь бодох", self.calculate_ui)
-        self.percent_label = ttk.Label(frame, text="—", font=("Segoe UI", 32, "bold"))
-        self.percent_label.pack(pady=10)
-        self.report_box = tk.Text(frame, height=10)
-        self.report_box.pack(fill="both", expand=True)
-
-    def calculate_ui(self):
-        employee = self.selected_employee()
-        completed = self.completed_entry.get()
-        if employee is None or not completed.isdigit():
-            return self.show_error("Ажилтан сонгоод гүйцэтгэсэн даалгаврыг тоогоор бичнэ үү.")
-        try:
-            employee = reg.update_progress(employee["id"], int(completed))
-            report = prod.build_report(employee, reg.last_activity(employee["id"]))   # сүүлийн идэвх
-            reg.save_report(employee["id"], report)
-        except (ValueError, OSError) as error:
-            return self.show_error(error)
-        self.percent_label.config(text=f"{report['completion_rate']}%")
-        self.report_box.delete("1.0", "end")
-        self.report_box.insert("1.0", prod.report_text(report))
-        self.refresh_employees()
-
     # ---------------------------------------------------------- админ: ажлын бүтээмж (бүх ажилтан)
     def build_overview(self, frame):
-        self.overview = table(frame, ("Нэр", "Төлөвлөсөн", "Дууссан", "Биелэлт %", "Сүүлийн идэвх (сек)"))
+        ttk.Label(frame, foreground="gray", text="Ажилтан бүрийн бүх хэмжилтийн нийлбэр. YouTube, Facebook, Instagram, "
+                  "Gmail нь браузерын идэвхтэй таб дээр байсан хугацаа.").pack(anchor="w", pady=(0, 6))
+        self.overview = table(frame, ("Нэр", "Нийт") + SITES + ("Хамгийн их програм",))
 
     def overview_loop(self):
         """5 секунд тутам шинэчилнэ — ажилтнуудын илгээсэн идэвх энд харагдана."""
@@ -218,13 +176,13 @@ class ProductivityApp(tk.Tk):
         self.refresh_overview()
 
     def refresh_overview(self):
-        """Бүх ажилтны бүтээмжийг JSON-оос уншиж хүснэгтэд харуулна."""
+        """Ажилтан бүрийн програм, 4 сайтын хугацааг JSON-оос уншиж хүснэгтэд харуулна."""
         self.overview.delete(*self.overview.get_children())
         for emp in reg.list_employees():
-            seconds = reg.last_activity(emp["id"]).get("total_seconds", 0)
-            self.overview.insert("", "end", values=(emp["name"], emp["target"], emp["completed"],
-                                                    prod.calculate_completion(emp["target"], emp["completed"]),
-                                                    f"{seconds:.0f}"))
+            apps = prod.total_apps(reg.activities(emp["id"]))
+            sites = [prod.minutes(seconds) for seconds in prod.site_times(apps).values()]
+            self.overview.insert("", "end", values=[emp["name"], prod.minutes(sum(apps.values()))] + sites
+                                 + [prod.top_app(apps)])
 
     # ---------------------------------------------------------- ажилтан: камер
     def build_camera(self, frame):
@@ -282,7 +240,7 @@ class ProductivityApp(tk.Tk):
         """Програм, сайт тус бүрийн хугацааг хэвтээ баганаар зурна (хамгийн их 8)."""
         self.usage_graph.delete("all")
         items = sorted(apps.items(), key=lambda item: item[1], reverse=True)[:8]
-        maximum = max((seconds for _, seconds in items), default=1)
+        maximum = max((seconds for _, seconds in items), default=0) or 1   # 0-д хуваахаас сэргийлнэ
         for index, (name, seconds) in enumerate(items):
             y = 18 + index * 36
             self.usage_graph.create_text(8, y + 10, text=name, anchor="w")

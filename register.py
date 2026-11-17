@@ -32,26 +32,28 @@ def list_employees():
     return load("employees")
 
 
-def add_employee(name, target):
-    if not name.strip():
+def hash_text(text):
+    """Нууц үг, кодыг буцааж тайлж болохгүй SHA-256 хэш болгоно — файлд зөвхөн хэш хадгална."""
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def add_employee(name, code):
+    """Шинэ ажилтан бүртгэнэ. Ийм нэртэй ажилтан байвал кодыг нь шинэчилнэ."""
+    name = name.strip()
+    if not name:
         raise ValueError("Ажилтны нэр хоосон байна.")
-    if target <= 0:
-        raise ValueError("Төлөвлөсөн даалгавар 0-ээс их байх ёстой.")
-    employee = {"id": str(time.time_ns()), "name": name.strip(), "target": target, "completed": 0}
-    save("employees", load("employees") + [employee])
-    return employee
-
-
-def update_progress(employee_id, completed):
+    if len(code) < 4:
+        raise ValueError("Код дор хаяж 4 тэмдэгт байна.")
     employees = load("employees")
-    for employee in employees:
-        if employee["id"] == employee_id:
-            if not 0 <= completed <= employee["target"]:
-                raise ValueError("Гүйцэтгэл 0-ээс төлөвлөсөн тоо хүртэл байна.")
-            employee["completed"] = completed
-            save("employees", employees)
-            return employee
-    raise ValueError("Ажилтан олдсонгүй.")
+    found = [employee for employee in employees if employee["name"].casefold() == name.casefold()]
+    if found:
+        employee = found[0]
+        employee["code"] = hash_text(code)
+    else:
+        employee = {"id": str(time.time_ns()), "name": name, "code": hash_text(code)}
+        employees.append(employee)
+    save("employees", employees)
+    return employee
 
 
 def delete_employee(employee_id):
@@ -62,20 +64,15 @@ def save_activity(employee_id, summary):
     save("activity", load("activity") + [dict(summary, employee_id=employee_id)])
 
 
-def last_activity(employee_id):
-    """Ажилтны хамгийн сүүлийн идэвхийн хураангуй. Байхгүй бол хоосон dict."""
-    found = [item for item in load("activity") if item["employee_id"] == employee_id]
-    return found[-1] if found else {}
-
-
-def save_report(employee_id, report):
-    save("reports", load("reports") + [dict(report, employee_id=employee_id)])
+def activities(employee_id):
+    """Тухайн ажилтны бүх хэмжилтийн хураангуй (жагсаалт)."""
+    return [item for item in load("activity") if item["employee_id"] == employee_id]
 
 
 # ---------------------------------------------------------------- админы эрх
 def check_password(password):
     """Админы нууц үгийг шалгана. Анх оруулсан нууц үг хадгалагдана — файлд зөвхөн хэш нь бичигдэнэ."""
-    hashed = hashlib.sha256(password.encode()).hexdigest()
+    hashed = hash_text(password)
     saved = load("admin")
     if not saved:
         save("admin", [hashed])
@@ -116,9 +113,12 @@ def answer(conn):
 
 
 def handle(request):
-    """Ажилтны хүсэлт: нэрсийн жагсаалт авах эсвэл идэвхийн хураангуй хадгалуулах."""
-    if request["action"] == "employees":       # бусдын даалгавар, хувийг ажилтанд илгээхгүй
-        return {"employees": [{"id": e["id"], "name": e["name"]} for e in list_employees()]}
+    """Ажилтны хүсэлт: нэр, кодоор нэвтрэх эсвэл идэвхийн хураангуй хадгалуулах."""
+    if request["action"] == "login":           # бусдын мэдээлэл, кодыг ажилтанд илгээхгүй
+        for e in list_employees():
+            if e["name"].casefold() == request["name"].strip().casefold() and e.get("code") == hash_text(request["code"]):
+                return {"id": e["id"], "name": e["name"]}
+        raise ValueError("Нэр эсвэл код буруу.")
     if request["action"] == "activity":
         if request["employee_id"] not in [e["id"] for e in list_employees()]:
             raise ValueError("Ажилтан олдсонгүй.")
