@@ -5,3 +5,4 @@ dist/
 *.spec
 .venv/
 data/admin.json
+data/faces.json

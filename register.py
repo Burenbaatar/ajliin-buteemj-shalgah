@@ -83,6 +83,29 @@ def add_employee(name, code, department=""):
 
 def delete_employee(employee_id):
     save("employees", [employee for employee in load("employees") if employee["id"] != employee_id])
+    delete_face(employee_id)                                    # нүүрний хээг хамт устгана
+
+
+def get_face(employee_id):
+    """Ажилтны нүүрний хээ (128 тоо). Бүртгээгүй бол None."""
+    return next((face["feature"] for face in load("faces") if face["employee_id"] == employee_id), None)
+
+
+def save_face(employee_id, feature):
+    """Зураг биш, зөвхөн нүүрний хээг (128 тоо) админы компьютерт хадгална. Нэг удаа л бүртгэнэ —
+    ажилтан өөрийн нүүрийг өөр хүнийхээр солихоос сэргийлж, шинэчлэхийг зөвхөн админ зөвшөөрнө."""
+    find_employee(employee_id)
+    if get_face(employee_id):
+        raise ValueError("Нүүр аль хэдийн бүртгэгдсэн. Шинэчлэх бол админд хандана уу.")
+    if not isinstance(feature, list) or len(feature) != 128 or \
+            not all(isinstance(value, (int, float)) for value in feature):
+        raise ValueError("Нүүрний хээ буруу.")
+    save("faces", load("faces") + [{"employee_id": employee_id, "feature": [round(float(v), 5) for v in feature]}])
+
+
+def delete_face(employee_id):
+    """Админ ажилтны нүүрийг устгаснаар ажилтан дахин бүртгүүлэх боломжтой болно."""
+    save("faces", [face for face in load("faces") if face["employee_id"] != employee_id])
 
 
 def find_employee(employee_id):
@@ -113,6 +136,8 @@ def save_day_delta(employee_id, computer, open_apps, delta):
     for minute, status in delta["minutes"].items():
         if status == "work" or minute not in record["minutes"]:
             record["minutes"][minute] = status
+    for name, value in delta.get("camera", {}).items():        # камерын шалгалт: өөрөө, өөр хүн, хүн алга...
+        record.setdefault("camera", {})[name] = record.get("camera", {}).get(name, 0) + value
     save("day-" + date, list(records.values()))
 
 
@@ -181,7 +206,7 @@ def answer(conn):
 
 
 def handle(request):
-    """Ажилтны хүсэлт: нэвтрэх, шууд төлөв + өсөлт илгээх, түр зогсоосон шалтгаан."""
+    """Ажилтны хүсэлт: нэвтрэх, нүүр бүртгүүлэх, шууд төлөв + өсөлт илгээх, түр зогсоосон шалтгаан."""
     if request["action"] == "login":           # бусдын мэдээлэл, кодыг ажилтанд илгээхгүй
         name = request["name"].strip()
         found = [e for e in list_employees() if e["name"].casefold() == name.casefold()]
@@ -191,7 +216,10 @@ def handle(request):
             raise ValueError("Танд код өгөөгүй байна. Админ таны нэрийг кодтой нь дахин бүртгэнэ.")
         if found[0]["code"] != hash_text(request["code"]):
             raise ValueError("Код буруу.")
-        return {"id": found[0]["id"], "name": found[0]["name"]}
+        return {"id": found[0]["id"], "name": found[0]["name"], "face": get_face(found[0]["id"])}   # камер харьцуулах хээ
+    if request["action"] == "face":
+        save_face(request["employee_id"], request["feature"])
+        return {"ok": True}
     if request["action"] == "live":
         find_employee(request["employee_id"])
         for delta in request["deltas"]:

@@ -1,7 +1,8 @@
-"""5-р гишүүн — админы самбарын тооцоо: төлөв, хоцролт, бүтээмж, өдрийн явц, 8 хавтан, 7 хоног, хэлтэс."""
+"""5-р гишүүн — админы самбарын тооцоо: төлөв, хоцролт, бүтээмж, өдрийн явц, камерын шалгалт, 8 хавтан,
+7 хоног, хэлтэс."""
 STATUS = {"work": "Ажиллаж байна", "away": "Гарсан", "offline": "Офлайн", "absent": "Ирээгүй"}
 COLUMNS = ("Ажилтан", "Одоо", "Одоогийн апп", "Ажилласан", "Гарсан", "Ирсэн – Явсан", "Хоцорсон", "Бүтээмж",
-           "Өдрийн явц")
+           "Өдрийн явц", "Өөр хүн", "Баталгаажаагүй")
 TILES = ("Хүн", "Ажиллаж байна", "Гарсан", "Офлайн", "Нийт ажилласан", "Дундаж / хүн", "Хоцорсон", "Ирээгүй")
 
 
@@ -75,8 +76,15 @@ def row_for(employee, record, live, settings, now):
               f"{times[0]} – {times[-1]}" if times else "— – —",
               hours_minutes(late) if late else "—",
               f"{pct}%" if pct is not None else "—",
-              timeline_bar(record["minutes"]))
+              timeline_bar(record["minutes"])) + camera_columns(record.get("camera"))
     return {"status": status, "work": record["work"], "late": late > 0, "pct": pct, "values": values}
+
+
+def camera_columns(camera):
+    """Камерын шалгалт: бүртгэлтэй ажилтны оронд өөр хүн суусан, амьд хүн гэж баталгаажаагүй хугацаа."""
+    if not camera:                                       # камер ажиллаагүй (жишээ нь камергүй компьютер)
+        return ("—", "—")
+    return duration(camera.get("other_seconds", 0)), duration(camera.get("unverified_seconds", 0))
 
 
 def tiles(rows):

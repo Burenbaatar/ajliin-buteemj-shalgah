@@ -100,6 +100,11 @@ class ActivityTracker:
     def resume(self):
         self.paused = False
 
+    @property
+    def running(self):
+        """Яг одоо хэмжиж байна уу (түр зогсоогоогүй). Камер хугацааг зөвхөн энэ үед тоолно."""
+        return self.last is not None and not self.paused
+
     def pause(self):
         self.paused = True                # түр зогссон хугацаа «гарсан» болж тоологдоно
 
