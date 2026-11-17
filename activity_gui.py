@@ -1,72 +1,43 @@
 import csv
 import ctypes
-import os
 import sys
 import time
 import tkinter as tk
+from collections import defaultdict
 from datetime import datetime, timezone
-from tkinter import filedialog, messagebox, ttk
 from ctypes import wintypes
+from tkinter import filedialog, messagebox, ttk
+
+import psutil
 
 
 POLL_INTERVAL_MS = 1000
-PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
-def foreground_process_name():
+def foreground_app_name() -> str:
     if sys.platform != "win32":
-        raise OSError("Энэ програм зөвхөн Windows дээр ажиллана.")
+        return "unknown"
 
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32 = ctypes.windll.user32
     user32.GetForegroundWindow.restype = wintypes.HWND
     user32.GetWindowThreadProcessId.argtypes = (
         wintypes.HWND,
         ctypes.POINTER(wintypes.DWORD),
     )
     user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-    kernel32.OpenProcess.argtypes = (
-        wintypes.DWORD,
-        wintypes.BOOL,
-        wintypes.DWORD,
-    )
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.QueryFullProcessImageNameW.argtypes = (
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        wintypes.LPWSTR,
-        ctypes.POINTER(wintypes.DWORD),
-    )
-    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
-    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-    kernel32.CloseHandle.restype = wintypes.BOOL
 
     window = user32.GetForegroundWindow()
     if not window:
-        raise ctypes.WinError(ctypes.get_last_error())
+        return "unknown"
 
     process_id = wintypes.DWORD()
-    if not user32.GetWindowThreadProcessId(window, ctypes.byref(process_id)):
-        raise ctypes.WinError(ctypes.get_last_error())
-    if process_id.value == os.getpid():
-        return None
-
-    process = kernel32.OpenProcess(
-        PROCESS_QUERY_LIMITED_INFORMATION, False, process_id.value
-    )
-    if not process:
-        raise ctypes.WinError(ctypes.get_last_error())
-
+    user32.GetWindowThreadProcessId(window, ctypes.byref(process_id))
+    if not process_id.value:
+        return "unknown"
     try:
-        image_path = ctypes.create_unicode_buffer(32768)
-        path_length = wintypes.DWORD(len(image_path))
-        if not kernel32.QueryFullProcessImageNameW(
-            process, 0, image_path, ctypes.byref(path_length)
-        ):
-            raise ctypes.WinError(ctypes.get_last_error())
-        return os.path.basename(image_path.value)
-    finally:
-        kernel32.CloseHandle(process)
+        return psutil.Process(process_id.value).name()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return "unknown"
 
 
 def timestamp_now():
@@ -83,7 +54,7 @@ class ActivityApp:
         self.ended_at = None
         self.last_sample_at = None
         self.last_process = None
-        self.process_seconds = {}
+        self.process_seconds = defaultdict(float)
         self.running = False
         self.finished = False
         self.after_id = None
@@ -136,7 +107,7 @@ class ActivityApp:
 
         now = time.monotonic()
         try:
-            process_name = foreground_process_name()
+            process_name = foreground_app_name()
         except OSError as error:
             messagebox.showerror("Хэмжилт эхэлсэнгүй", str(error), parent=self.root)
             return
@@ -150,10 +121,7 @@ class ActivityApp:
         self.start_button.configure(state="disabled")
         self.pause_button.configure(state="normal")
         self.finish_button.configure(state="normal")
-        if process_name is None:
-            self.status_var.set("Таны энэ цонх урд талд байна; одоогоор бүртгэлгүй.")
-        else:
-            self.status_var.set("Хэмжиж байна. Идэвхтэй програм: " + process_name)
+        self.status_var.set("Хэмжиж байна. Идэвхтэй програм: " + process_name)
         self._schedule_sample()
 
     def _schedule_sample(self):
@@ -163,24 +131,19 @@ class ActivityApp:
         now = time.monotonic()
         self._record_elapsed(now)
         try:
-            self.last_process = foreground_process_name()
+            self.last_process = foreground_app_name()
         except OSError as error:
             self._stop_after_error(error)
             return
 
         self.last_sample_at = now
-        if self.last_process is None:
-            self.status_var.set("Таны энэ цонх урд талд байна; одоогоор бүртгэлгүй.")
-        else:
-            self.status_var.set("Хэмжиж байна. Идэвхтэй програм: " + self.last_process)
+        self.status_var.set("Хэмжиж байна. Идэвхтэй програм: " + self.last_process)
         self._schedule_sample()
 
     def _record_elapsed(self, now):
-        if self.last_sample_at is not None and self.last_process is not None:
+        if self.last_sample_at is not None:
             elapsed = max(0.0, now - self.last_sample_at)
-            self.process_seconds[self.last_process] = (
-                self.process_seconds.get(self.last_process, 0.0) + elapsed
-            )
+            self.process_seconds[self.last_process] += elapsed
         self.last_sample_at = now
 
     def pause(self):
