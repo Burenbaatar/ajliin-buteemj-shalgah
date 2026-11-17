@@ -90,6 +90,7 @@ class ActivityTracker:
         self.open = []
         self.status = "away"
         self.paused = False
+        self.verified = True    # False бол ажилласан гэж тоолохгүй (камер ажилтныг өөрийг нь баталгаажуулаагүй)
         self.last = None        # сүүлд хэмжсэн мөч; None = хэмжихгүй
         self.delta = empty_delta()
 
@@ -114,7 +115,7 @@ class ActivityTracker:
             now = time.monotonic()
             spent, self.last = now - self.last, now
             self.app, self.mouse_on, self.open = active_app(), mouse_app(), open_apps()
-            working = not self.paused and idle_seconds() < self.away_after
+            working = not self.paused and idle_seconds() < self.away_after and self.verified
             self.status = "work" if working else "away"
             self.delta[self.status] += spent
             minute = time.strftime("%H:%M")

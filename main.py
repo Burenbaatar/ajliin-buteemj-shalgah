@@ -21,7 +21,10 @@ BOLD = ("Segoe UI", 12, "bold")
 CAMERA_COLORS = {"owner": ((0, 200, 0), "#1a7f37"), "unknown": ((0, 200, 0), "#1a7f37"),
                  "other": ((0, 0, 255), "#cf222e"), "fake": ((0, 0, 255), "#cf222e"),
                  "checking": ((0, 200, 255), "#9a6700"), "no_face": ((0, 200, 255), "#9a6700")}
-COLORS = {"work": "green", "away": "red", "offline": "gray", "absent": "#c0392b"}
+# Камер ажилтныг өөрийг нь баталгаажуулаагүй шалтгаан — тэр хугацаа ажилласанд тоологдохгүй, самбарт «Гарсан (…)»
+CAMERA_REASONS = {"other": "камерт өөр хүн", "no_face": "камерт хүн алга", "checking": "амьд хүн шалгаж байна",
+                  "fake": "амьд хүн баталгаажаагүй", "unknown": "нүүр бүртгээгүй", None: "камер ажиллахгүй"}
+COLORS ={"work": "green", "away": "red", "offline": "gray", "absent": "#c0392b"}
 TILE_COLORS = {"Ажиллаж байна": "green", "Гарсан": "red", "Офлайн": "gray", "Хоцорсон": "#c05000",
                "Ирээгүй": "#c0392b"}
 SETTING_LABELS = {"work_start": "Ажил эхлэх (ЦЦ:ММ)", "work_end": "Ажил дуусах (ЦЦ:ММ)",
@@ -77,6 +80,7 @@ class ProductivityApp(tk.Tk):
         self.monitor = None            # FaceMonitor: амьд хүн мөн эсэх, хэн суусан
         self.enrollment = None         # нүүр бүртгэж байгаа үед FaceEnrollment
         self.last_check = None         # шинэ амьд хүн шалгалт эхэлснийг мэдэхийн тулд
+        self.camera_state = None       # FaceMonitor-ийн сүүлийн төлөв; "owner" үед л ажилласан гэж тоолно
         self.pending = []              # админ руу хараахан илгээгдээгүй өсөлтүүд
         self.pause_reason = ""
         self.seconds = 0
@@ -190,8 +194,9 @@ class ProductivityApp(tk.Tk):
             self.tiles[name] = tk.Label(box, text="0", background="white", font=("Segoe UI", 18, "bold"),
                                         foreground=TILE_COLORS.get(name, "black"))
             self.tiles[name].pack(anchor="w")
-        ttk.Label(frame, foreground="gray", text="Мөр дээр давхар дарвал тухайн ажилтны өнөөдрийн бүх програм, "
-                  "хуудас, хулганы байршлыг харна. 5 секунд тутам шинэчлэгдэнэ. «Өөр хүн» — камерт бүртгэлтэй "
+        ttk.Label(frame, foreground="gray", wraplength=1380, text="Мөр дээр давхар дарвал тухайн ажилтны өнөөдрийн "
+                  "бүх програм, хуудас, хулганы байршлыг харна. 5 секунд тутам шинэчлэгдэнэ. «Ажилласан» — камер "
+                  "ажилтныг өөрийг нь баталгаажуулсан үеийн хугацаа. «Өөр хүн» — камерт бүртгэлтэй "
                   "ажилтны оронд өөр хүн суусан, «Баталгаажаагүй» — амьд хүн гэдэг нь батлагдаагүй хугацаа."
                   ).pack(anchor="w", pady=(0, 6))
         self.board = table(frame, prod.COLUMNS, {"Ажилтан": 170, "Одоо": 210, "Одоогийн апп": 220,
@@ -328,7 +333,7 @@ class ProductivityApp(tk.Tk):
     # ---------------------------------------------------------- ажилтан: камер
     def build_camera(self, frame):
         buttons = row(frame)
-        button(buttons, "Камер нээх", self.start_camera)
+        button(buttons, "Камер нээх", lambda: self.start_watching(quiet=False))
         button(buttons, "Камер хаах", self.close_camera_ui)
         button(buttons, "Нүүр бүртгэх", self.enroll_face_ui)
         face = "бүртгэсэн" if self.me.get("face") else "бүртгээгүй — «Нүүр бүртгэх» дарна уу"
@@ -340,10 +345,10 @@ class ProductivityApp(tk.Tk):
         self.video_label = ttk.Label(frame)
         self.video_label.pack(pady=8)
 
-    def start_watching(self):
+    def start_watching(self, quiet=True):
         """Камер асааж, амьд хүн мөн эсэх, бүртгэлтэй ажилтан өөрөө сууж байгаа эсэхийг шалгаж эхэлнэ.
         Хугацааг зөвхөн хэмжилт явагдаж байх үед тоолно."""
-        self.start_camera(quiet=True)
+        self.start_camera(quiet)
         if self.camera_service and self.monitor is None:
             self.monitor = FaceMonitor(self.me.get("face"))
             self.last_check = None
@@ -356,8 +361,9 @@ class ProductivityApp(tk.Tk):
         if not self.camera_service.start():
             self.camera_service = None
             message = "Камер нээгдсэнгүй. Камер залгаатай, өөр програм ашиглаагүй эсэхийг шалгана уу."
-            if quiet:                                  # камергүй компьютер — хэмжилт камергүйгээр явна
-                return self.face_label.config(text=message + " Хэмжилт камергүйгээр явна.", foreground="#9a6700")
+            if quiet:                                  # камергүй үед ажилласан хугацаа тоологдохгүй
+                return self.face_label.config(text=message + " Камер ажиллахгүй үед ажилласан хугацаа тоологдохгүй.",
+                                              foreground="#cf222e")
             return self.show_error(message)
         self.render_camera_frame()
 
@@ -366,11 +372,13 @@ class ProductivityApp(tk.Tk):
         if result:
             frame, faces = result
             state, text, check = "no_face" if not len(faces) else "owner", f"Илэрсэн нүүр: {len(faces)}", None
+            self.camera_state = "checking"             # нүүр бүртгэлийн үед баталгаажаагүй гэж үзнэ
             if self.enrollment:
                 state, text, check = "checking", *self.enroll_step(frame, faces)
             elif self.monitor:
                 counting = self.tracker is not None and self.tracker.running
                 state, text = self.monitor.update(self.camera_service, frame, faces, counting)
+                self.camera_state = state
                 check = self.monitor.check
                 if check is not None and check is not self.last_check:   # шинэ шалгалт эхэллээ
                     self.bring_to_front()
@@ -387,7 +395,7 @@ class ProductivityApp(tk.Tk):
     def enroll_face_ui(self):
         if self.me.get("face"):
             return self.show_error("Нүүр аль хэдийн бүртгэгдсэн. Шинэчлэх бол админд хандана уу.")
-        self.start_camera()
+        self.start_watching(quiet=False)
         if self.camera_service:
             self.enrollment = FaceEnrollment()
 
@@ -430,6 +438,7 @@ class ProductivityApp(tk.Tk):
             self.camera_service.stop()
             self.camera_service = None
             self.enrollment = None
+            self.camera_state = None
             self.video_label.config(image="")
             self.face_label.config(text="Камер хаалттай. Зураг хадгалахгүй.", foreground="")
 
@@ -439,8 +448,9 @@ class ProductivityApp(tk.Tk):
                   "эхэлнэ. Урд талын болон хулганы доорх цонхны програм, гарчиг (браузерын хуудасны гарчиг), "
                   "нээлттэй програмууд, гар/хулгана хөдөлсөн эсэхийг бүртгэж 5 секунд тутам админ руу илгээнэ. "
                   "Товчлуурын даралт, дэлгэцийн зураг, хуудасны агуулга авахгүй. Камер админы серверт нэвтэрмэгц "
-                  "асаж, амьд хүн мөн эсэх, бүртгэлтэй ажилтан өөрөө сууж байгаа эсэхийг шалгана. Хэмжилтийн үеэр "
-                  "камер хаагдахгүй.").pack(anchor="w", pady=(0, 8))
+                  "асаж, амьд хүн мөн эсэх, бүртгэлтэй ажилтан өөрөө сууж байгаа эсэхийг шалгана. Ажилласан хугацаа "
+                  "зөвхөн камер таныг баталгаажуулсан үед тоологдоно. Хэмжилтийн үеэр камер хаагдахгүй."
+                  ).pack(anchor="w", pady=(0, 8))
         buttons = row(frame)
         button(buttons, "Хэмжилт эхлэх", self.start_activity)
         button(buttons, "Түр зогсоох", self.pause_activity)
@@ -513,7 +523,7 @@ class ProductivityApp(tk.Tk):
         self.pending.append(delta)
         request = {"action": "live", "employee_id": self.me["id"], "computer": os.environ.get("COMPUTERNAME", ""),
                    "status": status or tracker.status, "app": tracker.app, "mouse": tracker.mouse_on,
-                   "open": tracker.open, "reason": self.pause_reason if tracker.paused else "", "deltas": self.pending}
+                   "open": tracker.open, "reason": self.away_reason(), "deltas": self.pending}
         try:
             answer = reg.ask(self.host, request, timeout=0.5)
             tracker.away_after = answer["settings"]["away_after_sec"]     # админы тохиргоо
@@ -524,18 +534,30 @@ class ProductivityApp(tk.Tk):
             pass                                       # сервер хүлээж аваагүй (жишээ нь ажилтан устсан)
         self.pending = []
 
+    def away_reason(self):
+        """Админы самбарт «Гарсан (…)» гэж харагдах шалтгаан: түр зогсоосон эсвэл камер баталгаажуулаагүй."""
+        if self.tracker.paused:
+            return self.pause_reason
+        return "" if self.tracker.verified else CAMERA_REASONS.get(self.camera_state, "")
+
     def tick(self):
         """Секунд тутам идэвхийг хэмжиж харуулна, 5 секунд тутам админ руу илгээнэ."""
         self.after(1000, self.tick)
         if not self.tracker:
             return
+        self.tracker.verified = self.camera_state == "owner"   # зөвхөн ажилтан өөрөө сууж байхад ажилласан гэж тоолно
         info = self.tracker.tick()
         self.seconds += 1
         if self.seconds % 5 == 0 and time.time() >= self.retry_at:
             self.send_live()
         self.open_label.config(text="Нээлттэй програмууд: " + ", ".join(info["open"]))
         if not self.tracker.paused:                    # түр зогсоосон бичгийг дарахгүй
-            state = "Ажиллаж байна" if info["status"] == "work" else "Гарсан (гар, хулгана хөдлөөгүй)"
+            if info["status"] == "work":
+                state = "Ажиллаж байна"
+            elif not self.tracker.verified:
+                state = f"Тоологдохгүй байна ({self.away_reason()}) — камер таныг баталгаажуулаагүй"
+            else:
+                state = "Гарсан (гар, хулгана хөдлөөгүй)"
             camera = f"\nКамер: {self.face_label.cget('text')}" if self.monitor else ""
             self.activity_label.config(text=f"{state} · {info['total_seconds']:.0f} сек\nУрд: {info['app']}\n"
                                             f"Хулгана: {info['mouse']}{camera}")
