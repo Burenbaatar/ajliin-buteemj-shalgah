@@ -1,8 +1,10 @@
 """1-р гишүүн — Tkinter GUI. Нэвтрэхэд ажилтан эсвэл админы эрхээр өөр табууд нээгдэнэ.
 
-Админ:   ажилтан бүртгэх, бүх хүний програм, сайтын хугацаа, түр зогсоосон шалтгааныг харах. Админы компьютер сервер болно.
-Ажилтан: камер, өөрийн идэвхийн хэмжилт. Үр дүнг админы сервер рүү JSON-оор илгээнэ.
+Админ:   Ажилтнууд (шууд самбар), 7 хоног, Хэрэглэгчид, Хэлтэс, Тохиргоо. Админы компьютер сервер болно.
+Ажилтан: камер, өөрийн идэвхийн хэмжилт. 5 секунд тутам админы сервер рүү JSON-оор илгээнэ.
 """
+import os
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
@@ -10,10 +12,17 @@ import cv2
 
 import productivity as prod                 # 5-р гишүүн
 import register as reg                      # 2-р гишүүн
-from activity import SITES, ActivityTracker # 4-р гишүүн
+from activity import ActivityTracker        # 4-р гишүүн
 from camera import CameraService            # 3-р гишүүн
 
 BOLD = ("Segoe UI", 12, "bold")
+COLORS = {"work": "green", "away": "red", "offline": "gray", "absent": "#c0392b"}
+TILE_COLORS = {"Ажиллаж байна": "green", "Гарсан": "red", "Офлайн": "gray", "Хоцорсон": "#c05000",
+               "Ирээгүй": "#c0392b"}
+SETTING_LABELS = {"work_start": "Ажил эхлэх (ЦЦ:ММ)", "work_end": "Ажил дуусах (ЦЦ:ММ)",
+                  "late_grace_min": "Хоцролтын хүлцэл (мин)", "away_after_sec": "«Гарсан» гэж үзэх (сек хөдөлгөөнгүй)",
+                  "unproductive": "Бүтээмжгүй програм / сайт (таслалаар)"}
+DAYS = ("Да", "Мя", "Лх", "Пү", "Ба", "Бя", "Ня")
 
 
 def row(parent):
@@ -34,13 +43,20 @@ def entry(parent, text, width):
     return field
 
 
-def table(parent, columns):
+def table(parent, columns, widths=None):
     tree = ttk.Treeview(parent, columns=columns, show="headings")
     for column in columns:
-        tree.heading(column, text=column)
-        tree.column(column, width=100)                 # бүх багана цонхонд багтана
+        tree.heading(column, text=column, anchor="w")
+        tree.column(column, width=(widths or {}).get(column, 80), anchor="w")
     tree.pack(fill="both", expand=True)
     return tree
+
+
+def fill(tree, rows):
+    """Хүснэгтийг цэвэрлээд шинэ мөрүүдээр дүүргэнэ."""
+    tree.delete(*tree.get_children())
+    for values in rows:
+        tree.insert("", "end", values=values)
 
 
 class ProductivityApp(tk.Tk):
@@ -53,6 +69,10 @@ class ProductivityApp(tk.Tk):
         self.camera_service = None
         self.camera_job = None
         self.tracker = None            # идэвх хэмжиж байгаа үед ActivityTracker
+        self.pending = []              # админ руу хараахан илгээгдээгүй өсөлтүүд
+        self.pause_reason = ""
+        self.seconds = 0
+        self.retry_at = 0              # админ холбогдохгүй бол энэ хүртэл дахин оролдохгүй
         self.build_login()
         self.after(1000, self.tick)
 
@@ -103,8 +123,13 @@ class ProductivityApp(tk.Tk):
         try:
             self.me = reg.ask(self.host, request)
         except OSError:
-            return self.show_error("Админы компьютертэй холбогдсонгүй. Админ нэвтэрсэн эсэх, хаягийг шалгана уу.")
-        except ValueError as error:                    # нэр эсвэл код буруу
+            return self.show_error(f"Админы компьютертэй ({self.host}, порт {reg.PORT}) холбогдсонгүй. Шалгах зүйл:\n"
+                                   "1. Админы програм нээлттэй, админаар нэвтэрсэн эсэх.\n"
+                                   "2. «Админы компьютер» талбарт админы цонхны дээд талд бичигдсэн IP хаяг байгаа эсэх "
+                                   "(127.0.0.1 нь зөвхөн нэг компьютер дээр ажиллана).\n"
+                                   "3. Хоёр компьютер нэг сүлжээнд (Wi-Fi) байгаа эсэх.\n"
+                                   "4. Админы компьютерийн Windows Firewall ProductivitySystem-д зөвшөөрөл өгсөн эсэх.")
+        except ValueError as error:                    # бүртгэлгүй нэр, код буруу г.м.
             return self.show_error(error)
         self.open_tabs("Ажилтан: " + self.me["name"],
                        [("Камер", self.build_camera), ("Компьютерийн идэвх", self.build_activity)])
@@ -113,15 +138,28 @@ class ProductivityApp(tk.Tk):
         password = self.password_entry.get()
         if not password:
             return self.show_error("Нууц үгээ бичнэ үү.")
-        if not reg.check_password(password):
-            return self.show_error("Нууц үг буруу.")
+        try:
+            correct = reg.check_password(password)
+        except OSError as error:
+            return self.show_error(f"Өгөгдлийн хавтсанд бичиж чадсангүй: {error}\n"
+                                   "Програмыг Documents гэх мэт өөрийн хавтсанд хуулж ажиллуулна уу.")
+        if not correct:
+            return self.show_error("Нууц үг буруу.\nЭнэ компьютерийн админы нууц үг энд хадгалагдсан:\n"
+                                   f"{reg.get_data_dir()}\\admin.json\n"
+                                   "Мартсан бол тэр файлыг устгаад шинэ нууц үгээр нэвтэрнэ.")
         try:
             self.server = reg.start_server()
         except OSError:
-            return self.show_error("Сервер асаж чадсангүй. Админы програм аль хэдийн нээлттэй байж магадгүй.")
-        self.open_tabs("Админ", [("Ажилтны бүртгэл", self.build_employee), ("Ажлын бүтээмж", self.build_overview)])
+            return self.show_error("Сервер асаж чадсангүй. Энэ компьютер дээр админы програм аль хэдийн "
+                                   "нээлттэй байж магадгүй.")
+        self.geometry("1250x680")
+        top = self.open_tabs("Админ", [("Ажилтнууд", self.build_board), ("7 хоног", self.build_week),
+                                       ("Хэрэглэгчид", self.build_employee), ("Хэлтэс", self.build_departments),
+                                       ("Тохиргоо", self.build_settings)])
+        ttk.Label(top, foreground="#1a5fb4", text=f"Ажилтнууд «Админы компьютер» талбарт: {reg.my_address()}   ·   "
+                  f"Өгөгдөл: {reg.get_data_dir()}").pack(side="left")
         self.refresh_employees()
-        self.overview_loop()
+        self.board_loop()
         self.serve_loop()
 
     def serve_loop(self):
@@ -129,32 +167,102 @@ class ProductivityApp(tk.Tk):
         self.after(100, self.serve_loop)
         reg.serve(self.server)
 
-    # ---------------------------------------------------------- админ: ажилтны бүртгэл
+    # ---------------------------------------------------------- админ: Ажилтнууд (шууд самбар)
+    def build_board(self, frame):
+        boxes = row(frame)
+        self.tiles = {}
+        for name in prod.TILES:
+            box = tk.Frame(boxes, background="white", highlightthickness=1, highlightbackground="#d0d0d0",
+                           padx=12, pady=6)
+            box.pack(side="left", padx=(0, 8))
+            tk.Label(box, text=name, background="white", foreground="gray").pack(anchor="w")
+            self.tiles[name] = tk.Label(box, text="0", background="white", font=("Segoe UI", 18, "bold"),
+                                        foreground=TILE_COLORS.get(name, "black"))
+            self.tiles[name].pack(anchor="w")
+        ttk.Label(frame, foreground="gray", text="Мөр дээр давхар дарвал тухайн ажилтны өнөөдрийн бүх програм, "
+                  "хуудас, хулганы байршлыг харна. 5 секунд тутам шинэчлэгдэнэ.").pack(anchor="w", pady=(0, 6))
+        self.board = table(frame, prod.COLUMNS, {"Ажилтан": 190, "Одоо": 230, "Одоогийн апп": 250,
+                                                 "Ирсэн – Явсан": 100, "Өдрийн явц": 200})
+        for status, color in COLORS.items():
+            self.board.tag_configure(status, foreground=color)
+        self.board.bind("<Double-1>", self.show_detail)
+
+    def board_loop(self):
+        self.after(5000, self.board_loop)
+        self.refresh_board()
+
+    def refresh_board(self):
+        """Ажилтнууд, Хэлтэс, 7 хоног табуудыг JSON болон шууд төлөвөөс шинэчилнэ."""
+        settings, employees = reg.load_settings(), reg.list_employees()
+        records = reg.day_records(time.strftime("%Y-%m-%d"))
+        rows = [prod.row_for(e, records.get(e["id"]), reg.live_status(e["id"]), settings, time.time())
+                for e in employees]
+        self.board.delete(*self.board.get_children())
+        for employee, line in zip(employees, rows):
+            self.board.insert("", "end", iid=employee["id"], values=line["values"], tags=(line["status"],))
+        for name, value in prod.tiles(rows).items():
+            self.tiles[name].config(text=value)
+        fill(self.departments, prod.department_rows(employees, rows))
+        monday = time.time() - time.localtime().tm_wday * 86400
+        week = [reg.day_records(time.strftime("%Y-%m-%d", time.localtime(monday + i * 86400))) for i in range(7)]
+        fill(self.week, [prod.week_row(e, week) for e in employees])
+
+    def show_detail(self, event):
+        """Давхар дарсан ажилтны өнөөдрийн бүх програм, хуудас, хулгана, нээлттэй програм, түр зогсолт."""
+        employee_id = self.board.focus()
+        if not employee_id:
+            return
+        name = next(e["name"] for e in reg.list_employees() if e["id"] == employee_id)
+        record = reg.day_records(time.strftime("%Y-%m-%d")).get(employee_id, {})
+        window = tk.Toplevel(self)
+        window.title("Дэлгэрэнгүй — " + name)
+        window.geometry("850x500")
+        tree = table(window, ("Хаана", "Програм / хуудас", "Хугацаа"), {"Хаана": 110, "Програм / хуудас": 600})
+        for label, key in (("Урд талд", "apps"), ("Хулгана дээр", "mouse")):
+            for title, seconds in sorted(record.get(key, {}).items(), key=lambda item: -item[1]):
+                tree.insert("", "end", values=(label, title, prod.duration(seconds)))
+        for app in record.get("open", []):
+            tree.insert("", "end", values=("Нээлттэй", app, ""))
+        for pause in reg.pauses_today(employee_id):
+            tree.insert("", "end", values=("Түр зогссон", pause["reason"], pause["time"][11:16]))
+
+    # ---------------------------------------------------------- админ: 7 хоног, хэлтэс
+    def build_week(self, frame):
+        ttk.Label(frame, foreground="gray", text="Энэ 7 хоногийн өдөр бүрийн ажилласан цаг.").pack(anchor="w")
+        self.week = table(frame, ("Ажилтан",) + DAYS + ("Нийт",), {"Ажилтан": 200})
+
+    def build_departments(self, frame):
+        self.departments = table(frame, ("Хэлтэс", "Хүн", "Ажиллаж байна", "Нийт ажилласан", "Дундаж бүтээмж"),
+                                 {"Хэлтэс": 200, "Ажиллаж байна": 120, "Нийт ажилласан": 120, "Дундаж бүтээмж": 120})
+
+    # ---------------------------------------------------------- админ: Хэрэглэгчид
     def build_employee(self, frame):
         form = row(frame)
         self.name_entry = entry(form, "Нэр:", 22)
+        self.department_entry = entry(form, "Хэлтэс:", 18)
         self.code_entry = entry(form, "Код:", 8)
         button(form, "Бүртгэх", self.add_employee_ui)
         button(form, "Жагсаалт шинэчлэх", self.refresh_employees)
         button(form, "Устгах", self.delete_selected_ui)
         ttk.Label(frame, foreground="gray", text="Ажилтан нэр, кодоороо нэвтэрнэ. Байгаа нэрийг дахин бүртгэвэл "
-                  "код нь шинэчлэгдэнэ.").pack(anchor="w", pady=(0, 6))
-        self.tree = table(frame, ("Нэр", "Код"))
+                  "хэлтэс, код нь шинэчлэгдэнэ.").pack(anchor="w", pady=(0, 6))
+        self.tree = table(frame, ("Нэр", "Хэлтэс", "Код"), {"Нэр": 250, "Хэлтэс": 250})
 
     def add_employee_ui(self):
         try:
-            reg.add_employee(self.name_entry.get(), self.code_entry.get())
+            reg.add_employee(self.name_entry.get(), self.code_entry.get(), self.department_entry.get())
         except (ValueError, OSError) as error:
             return self.show_error(error)
-        self.name_entry.delete(0, "end")
-        self.code_entry.delete(0, "end")
+        for field in (self.name_entry, self.department_entry, self.code_entry):
+            field.delete(0, "end")
         self.refresh_employees()
 
     def refresh_employees(self):
         self.tree.delete(*self.tree.get_children())
         for emp in reg.list_employees():
-            self.tree.insert("", "end", iid=emp["id"], values=(emp["name"], "байгаа" if emp.get("code") else "алга"))
-        self.refresh_overview()
+            self.tree.insert("", "end", iid=emp["id"], values=(emp["name"], emp.get("department", ""),
+                                                               "байгаа" if emp.get("code") else "алга"))
+        self.refresh_board()
 
     def delete_selected_ui(self):
         employee_id = self.tree.focus()
@@ -164,27 +272,33 @@ class ProductivityApp(tk.Tk):
             reg.delete_employee(employee_id)
             self.refresh_employees()
 
-    # ---------------------------------------------------------- админ: ажлын бүтээмж (бүх ажилтан)
-    def build_overview(self, frame):
-        ttk.Label(frame, foreground="gray", text="Ажилтан бүрийн бүх хэмжилтийн нийлбэр. YouTube, Facebook, Instagram, "
-                  "Gmail нь браузерын идэвхтэй таб дээр байсан хугацаа.").pack(anchor="w", pady=(0, 6))
-        self.overview = table(frame, ("Нэр", "Нийт") + SITES + ("Хамгийн их програм", "Түр зогсох шалтгаан"))
-        self.overview.column("Түр зогсох шалтгаан", width=150)
+    # ---------------------------------------------------------- админ: Тохиргоо
+    def build_settings(self, frame):
+        settings = reg.load_settings()
+        self.setting_fields = {}
+        for key, text in SETTING_LABELS.items():
+            form = row(frame)
+            ttk.Label(form, text=text, width=36).pack(side="left")
+            field = ttk.Entry(form, width=50)
+            field.pack(side="left")
+            value = settings[key]
+            field.insert(0, ", ".join(value) if isinstance(value, list) else str(value))
+            self.setting_fields[key] = field
+        button(row(frame), "Хадгалах", self.save_settings_ui)
 
-    def overview_loop(self):
-        """5 секунд тутам шинэчилнэ — ажилтнуудын илгээсэн идэвх энд харагдана."""
-        self.after(5000, self.overview_loop)
-        self.refresh_overview()
-
-    def refresh_overview(self):
-        """Ажилтан бүрийн програм, 4 сайтын хугацааг JSON-оос уншиж хүснэгтэд харуулна."""
-        self.overview.delete(*self.overview.get_children())
-        for emp in reg.list_employees():
-            apps = prod.total_apps(reg.activities(emp["id"]))
-            sites = [prod.minutes(seconds) for seconds in prod.site_times(apps).values()]
-            reason = reg.last_pause(emp["id"]).get("reason", "")
-            self.overview.insert("", "end", values=[emp["name"], prod.minutes(sum(apps.values()))] + sites
-                                 + [prod.top_app(apps), reason])
+    def save_settings_ui(self):
+        get = {key: field.get().strip() for key, field in self.setting_fields.items()}
+        try:
+            settings = {"work_start": get["work_start"], "work_end": get["work_end"],
+                        "late_grace_min": int(get["late_grace_min"]), "away_after_sec": int(get["away_after_sec"]),
+                        "unproductive": [word.strip() for word in get["unproductive"].split(",") if word.strip()]}
+            prod.to_minutes(settings["work_start"])     # ЦЦ:ММ хэлбэртэй эсэхийг шалгана
+            prod.to_minutes(settings["work_end"])
+        except ValueError:
+            return self.show_error("Цагийг ЦЦ:ММ, тоог бүхэл тоогоор бичнэ үү.")
+        reg.save_settings(settings)
+        messagebox.showinfo("Тохиргоо", "Хадгаллаа. Ажилтнуудад 5 секундын дотор хүрнэ.", parent=self)
+        self.refresh_board()
 
     # ---------------------------------------------------------- ажилтан: камер
     def build_camera(self, frame):
@@ -226,33 +340,36 @@ class ProductivityApp(tk.Tk):
 
     # ---------------------------------------------------------- ажилтан: компьютерийн идэвх
     def build_activity(self, frame):
-        ttk.Label(frame, wraplength=700, text="Хэмжилт зөвхөн «Хэмжилт эхлэх» дарсны дараа, зөвшөөрөлтэйгээр "
-                  "эхэлнэ. Урд талын програм, танигдсан сайтын (YouTube, Facebook, Instagram, Gmail) нэр, "
-                  "хугацааг л бүртгээд админ руу илгээнэ.").pack(anchor="w", pady=(0, 8))
+        ttk.Label(frame, wraplength=850, text="Хэмжилт зөвхөн «Хэмжилт эхлэх» дарсны дараа, зөвшөөрөлтэйгээр "
+                  "эхэлнэ. Урд талын болон хулганы доорх цонхны програм, гарчиг (браузерын хуудасны гарчиг), "
+                  "нээлттэй програмууд, гар/хулгана хөдөлсөн эсэхийг бүртгэж 5 секунд тутам админ руу илгээнэ. "
+                  "Товчлуурын даралт, дэлгэцийн зураг, хуудасны агуулга авахгүй.").pack(anchor="w", pady=(0, 8))
         buttons = row(frame)
         button(buttons, "Хэмжилт эхлэх", self.start_activity)
         button(buttons, "Түр зогсоох", self.pause_activity)
         button(buttons, "Дуусгах", self.finish_activity)
-        self.activity_label = ttk.Label(frame, text="Хэмжилт эхлээгүй.", font=("Segoe UI", 12))
-        self.activity_label.pack(pady=10)
-        self.usage_graph = tk.Canvas(frame, height=320, background="white")
+        self.activity_label = ttk.Label(frame, text="Хэмжилт эхлээгүй.", font=("Segoe UI", 11), wraplength=850)
+        self.activity_label.pack(anchor="w", pady=(4, 2))
+        self.open_label = ttk.Label(frame, foreground="gray", wraplength=850)
+        self.open_label.pack(anchor="w", pady=(0, 6))
+        self.usage_graph = tk.Canvas(frame, height=300, background="white")
         self.usage_graph.pack(fill="both", expand=True)
 
     def update_usage_graph(self, apps):
-        """Програм, сайт тус бүрийн хугацааг хэвтээ баганаар зурна (хамгийн их 8)."""
+        """Програм, хуудас тус бүрийн хугацааг хэвтээ баганаар зурна (хамгийн их 8)."""
         self.usage_graph.delete("all")
         items = sorted(apps.items(), key=lambda item: item[1], reverse=True)[:8]
         maximum = max((seconds for _, seconds in items), default=0) or 1   # 0-д хуваахаас сэргийлнэ
         for index, (name, seconds) in enumerate(items):
-            y = 18 + index * 36
-            self.usage_graph.create_text(8, y + 10, text=name, anchor="w")
-            width = 480 * seconds / maximum
-            self.usage_graph.create_rectangle(190, y, 190 + width, y + 20, fill="#4a90d9", outline="")
-            value = f"{seconds:.0f} сек" if seconds < 60 else f"{seconds / 60:.1f} мин"
-            self.usage_graph.create_text(680, y + 10, text=value, anchor="e")
+            y = 18 + index * 34
+            self.usage_graph.create_text(8, y + 10, text=name if len(name) <= 38 else name[:37] + "…", anchor="w")
+            width = 380 * seconds / maximum
+            self.usage_graph.create_rectangle(290, y, 290 + width, y + 20, fill="#4a90d9", outline="")
+            self.usage_graph.create_text(760, y + 10, text=prod.duration(seconds), anchor="e")
 
     def start_activity(self):
         if self.tracker:                               # түр зогсоосон хэмжилтийг үргэлжлүүлнэ
+            self.pause_reason = ""
             return self.tracker.resume()
         self.tracker = ActivityTracker()
         self.tracker.start()
@@ -260,7 +377,7 @@ class ProductivityApp(tk.Tk):
 
     def pause_activity(self):
         """Түр зогсоохдоо шалтгаан асууж админ руу илгээнэ."""
-        if self.tracker and self.tracker.last is not None:     # хэмжиж байгаа үед л (аль хэдийн зогссон бол асуухгүй)
+        if self.tracker and not self.tracker.paused:  # хэмжиж байгаа үед л (аль хэдийн зогссон бол асуухгүй)
             reason = simpledialog.askstring("Түр зогсоох", "Ямар шалтгаанаар түр зогсоож байна вэ?", parent=self)
             if reason is None:
                 return
@@ -272,32 +389,55 @@ class ProductivityApp(tk.Tk):
             except (ValueError, OSError) as error:
                 return self.show_error(f"Админ руу илгээж чадсангүй: {error}")
             self.tracker.pause()
+            self.pause_reason = reason
             self.activity_label.config(text=f"Түр зогсоосон — админд илгээлээ: {reason}")
 
     def finish_activity(self):
-        """Хэмжилтийг дуусгаад хураангуйг админы сервер рүү илгээнэ."""
+        """Хэмжилтийг дуусгаад сүүлийн өсөлтийг илгээнэ. Админы самбарт «Офлайн» болно."""
         if not self.tracker:
             return
         summary = self.tracker.stop()
+        self.send_live("offline")
         self.tracker = None
         self.update_usage_graph(summary["apps"])
+        self.activity_label.config(text=f"Хэмжилт дууслаа: {summary['total_seconds']:.0f} сек ажилласан.")
+
+    def send_live(self, status=None):
+        """Шууд төлөв болон сүүлд илгээснээс хойших өсөлтийг админ руу илгээнэ (0.5 сек л хүлээнэ)."""
+        tracker = self.tracker
+        self.pending.append(tracker.take_delta())
+        request = {"action": "live", "employee_id": self.me["id"], "computer": os.environ.get("COMPUTERNAME", ""),
+                   "status": status or tracker.status, "app": tracker.app, "mouse": tracker.mouse_on,
+                   "open": tracker.open, "reason": self.pause_reason if tracker.paused else "", "deltas": self.pending}
         try:
-            reg.ask(self.host, {"action": "activity", "employee_id": self.me["id"], "summary": summary})
-        except (OSError, ValueError) as error:
-            return self.show_error(f"Админ руу илгээж чадсангүй: {error}")
-        self.activity_label.config(text=f"{summary['total_seconds']:.0f} сек — админ руу илгээлээ")
+            answer = reg.ask(self.host, request, timeout=0.5)
+            tracker.away_after = answer["settings"]["away_after_sec"]     # админы тохиргоо
+        except OSError:                                # админ холбогдохгүй — 30 сек дараа хамт илгээнэ
+            self.retry_at = time.time() + 30
+            return
+        except ValueError:
+            pass                                       # сервер хүлээж аваагүй (жишээ нь ажилтан устсан)
+        self.pending = []
 
     def tick(self):
-        """Секунд тутам идэвхийг хэмжиж харуулна."""
+        """Секунд тутам идэвхийг хэмжиж харуулна, 5 секунд тутам админ руу илгээнэ."""
         self.after(1000, self.tick)
-        if self.tracker and self.tracker.last is not None:         # түр зогсоосон үед бичгийг дарахгүй
-            info = self.tracker.tick()
-            self.activity_label.config(text=f"{info['app'] or '—'} · {info['total_seconds']:.0f} сек")
+        if not self.tracker:
+            return
+        info = self.tracker.tick()
+        self.seconds += 1
+        if self.seconds % 5 == 0 and time.time() >= self.retry_at:
+            self.send_live()
+        self.open_label.config(text="Нээлттэй програмууд: " + ", ".join(info["open"]))
+        if not self.tracker.paused:                    # түр зогсоосон бичгийг дарахгүй
+            state = "Ажиллаж байна" if info["status"] == "work" else "Гарсан (гар, хулгана хөдлөөгүй)"
+            self.activity_label.config(text=f"{state} · {info['total_seconds']:.0f} сек\nУрд: {info['app']}\n"
+                                            f"Хулгана: {info['mouse']}")
             self.update_usage_graph(self.tracker.apps)
 
     def on_close(self):
         if messagebox.askokcancel("Гарах", "Програмыг хаах уу?", parent=self):
-            self.finish_activity()                     # хэмжиж байсан бол илгээнэ
+            self.finish_activity()                     # хэмжиж байсан бол сүүлийн өсөлтийг илгээнэ
             self.stop_camera()
             if self.server:
                 self.server.close()

@@ -3,19 +3,35 @@ import hashlib
 import json
 import os
 import socket
+import sys
 import time
 
 PORT = 5050                                    # ажилтнууд админы компьютерийн энэ порт руу холбогдоно
+LIVE = {}                                      # ажилтны id → шууд төлөв (зөвхөн санах ойд, файлд биш)
+DEFAULT_SETTINGS = {"work_start": "09:00", "work_end": "18:00", "late_grace_min": 5, "away_after_sec": 60,
+                    "unproductive": ["YouTube", "Facebook", "Instagram"]}
 
 
 def get_data_dir():
-    """Өгөгдлийн хавтас: програмын хажууд байх data хавтас (.exe дотор биш, хаагаад нээсэн ч үлдэнэ)."""
-    os.makedirs("data", exist_ok=True)
-    return "data"
+    """Өгөгдлийн хавтас: програмын (main.py эсвэл .exe) хажууд байх data хавтас.
+    Програмыг хаанаас ч нээсэн ижил хавтсыг ашиглана. .exe дотор биш тул хаагаад нээсэн ч үлдэнэ."""
+    folder = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "data")
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
+def my_address():
+    """Энэ компьютерийн дотоод сүлжээний IP хаяг — ажилтнууд «Админы компьютер» талбарт үүнийг бичнэ."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("8.8.8.8", 80))     # UDP: юу ч илгээхгүй, аль сүлжээгээр гарахыг л асууна
+            return probe.getsockname()[0]
+    except OSError:
+        return socket.gethostname()
 
 
 def load(name):
-    """name.json-оос жагсаалт уншина. Файл байхгүй бол хоосон жагсаалт."""
+    """name.json-оос өгөгдөл уншина. Файл байхгүй бол хоосон жагсаалт."""
     path = os.path.join(get_data_dir(), name + ".json")
     if not os.path.exists(path):
         return []
@@ -28,6 +44,15 @@ def save(name, items):
         json.dump({name: items}, file, ensure_ascii=False, indent=2)
 
 
+def load_settings():
+    return dict(DEFAULT_SETTINGS, **(load("settings") or {}))
+
+
+def save_settings(settings):
+    save("settings", settings)
+
+
+# ---------------------------------------------------------------- ажилтан
 def list_employees():
     return load("employees")
 
@@ -37,8 +62,8 @@ def hash_text(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def add_employee(name, code):
-    """Шинэ ажилтан бүртгэнэ. Ийм нэртэй ажилтан байвал кодыг нь шинэчилнэ."""
+def add_employee(name, code, department=""):
+    """Шинэ ажилтан бүртгэнэ. Ийм нэртэй ажилтан байвал код, хэлтсийг нь шинэчилнэ."""
     name = name.strip()
     if not name:
         raise ValueError("Ажилтны нэр хоосон байна.")
@@ -48,10 +73,10 @@ def add_employee(name, code):
     found = [employee for employee in employees if employee["name"].casefold() == name.casefold()]
     if found:
         employee = found[0]
-        employee["code"] = hash_text(code)
     else:
-        employee = {"id": str(time.time_ns()), "name": name, "code": hash_text(code)}
+        employee = {"id": str(time.time_ns()), "name": name}
         employees.append(employee)
+    employee["code"], employee["department"] = hash_text(code), department.strip()
     save("employees", employees)
     return employee
 
@@ -60,20 +85,46 @@ def delete_employee(employee_id):
     save("employees", [employee for employee in load("employees") if employee["id"] != employee_id])
 
 
-def save_activity(employee_id, summary):
-    save("activity", load("activity") + [dict(summary, employee_id=employee_id)])
+def find_employee(employee_id):
+    employee = next((e for e in list_employees() if e["id"] == employee_id), None)
+    if employee is None:
+        raise ValueError("Ажилтан олдсонгүй.")
+    return employee
 
 
-def activities(employee_id):
-    """Тухайн ажилтны бүх хэмжилтийн хураангуй (жагсаалт)."""
-    return [item for item in load("activity") if item["employee_id"] == employee_id]
+# ---------------------------------------------------------------- өдрийн бичлэг ба шууд төлөв
+def day_records(date):
+    """Тухайн өдрийн бүх ажилтны бичлэг: {ажилтны id: бичлэг}. date = "2026-11-17"."""
+    return {record["employee_id"]: record for record in load("day-" + date)}
+
+
+def save_day_delta(employee_id, computer, open_apps, delta):
+    """Ажилтны илгээсэн өсөлтийг өнөөдрийн бичлэгт нэмнэ (data/day-ОООО-СС-ӨӨ.json)."""
+    date = time.strftime("%Y-%m-%d")
+    records = day_records(date)
+    record = records.setdefault(employee_id, {"employee_id": employee_id, "work": 0, "away": 0,
+                                              "apps": {}, "mouse": {}, "minutes": {}})
+    record["computer"], record["open"] = computer, open_apps
+    record["work"] += delta["work"]
+    record["away"] += delta["away"]
+    for key in ("apps", "mouse"):
+        for name, seconds in delta[key].items():
+            record[key][name] = record[key].get(name, 0) + seconds
+    for minute, status in delta["minutes"].items():
+        if status == "work" or minute not in record["minutes"]:
+            record["minutes"][minute] = status
+    save("day-" + date, list(records.values()))
+
+
+def live_status(employee_id):
+    """Ажилтны шууд төлөв. 30 секунд мэдээлэл ирээгүй бол None (офлайн)."""
+    live = LIVE.get(employee_id)
+    return live if live and time.time() - live["time"] < 30 else None
 
 
 def save_pause(employee_id, reason):
     """Ажилтан түр зогсоосон шалтгааныг цагтай нь pauses.json-д хадгална."""
-    employee = next((e for e in list_employees() if e["id"] == employee_id), None)
-    if employee is None:
-        raise ValueError("Ажилтан олдсонгүй.")
+    employee = find_employee(employee_id)
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("Шалтгаанаа бичнэ үү.")
     pause = {"employee_id": employee_id, "employee_name": employee["name"],
@@ -81,9 +132,9 @@ def save_pause(employee_id, reason):
     save("pauses", load("pauses") + [pause])
 
 
-def last_pause(employee_id):
-    found = [item for item in load("pauses") if item["employee_id"] == employee_id]
-    return found[-1] if found else {}
+def pauses_today(employee_id):
+    today = time.strftime("%Y-%m-%d")
+    return [item for item in load("pauses") if item["employee_id"] == employee_id and item["time"].startswith(today)]
 
 
 # ---------------------------------------------------------------- админы эрх
@@ -130,17 +181,24 @@ def answer(conn):
 
 
 def handle(request):
-    """Ажилтны хүсэлт: нэр, кодоор нэвтрэх эсвэл идэвхийн хураангуй хадгалуулах."""
+    """Ажилтны хүсэлт: нэвтрэх, шууд төлөв + өсөлт илгээх, түр зогсоосон шалтгаан."""
     if request["action"] == "login":           # бусдын мэдээлэл, кодыг ажилтанд илгээхгүй
-        for e in list_employees():
-            if e["name"].casefold() == request["name"].strip().casefold() and e.get("code") == hash_text(request["code"]):
-                return {"id": e["id"], "name": e["name"]}
-        raise ValueError("Нэр эсвэл код буруу.")
-    if request["action"] == "activity":
-        if request["employee_id"] not in [e["id"] for e in list_employees()]:
-            raise ValueError("Ажилтан олдсонгүй.")
-        save_activity(request["employee_id"], request["summary"])
-        return {"ok": True}
+        name = request["name"].strip()
+        found = [e for e in list_employees() if e["name"].casefold() == name.casefold()]
+        if not found:
+            raise ValueError(f"«{name}» нэртэй ажилтан энэ админы бүртгэлд алга. Админ «Хэрэглэгчид» таб дээр бүртгэнэ.")
+        if not found[0].get("code"):
+            raise ValueError("Танд код өгөөгүй байна. Админ таны нэрийг кодтой нь дахин бүртгэнэ.")
+        if found[0]["code"] != hash_text(request["code"]):
+            raise ValueError("Код буруу.")
+        return {"id": found[0]["id"], "name": found[0]["name"]}
+    if request["action"] == "live":
+        find_employee(request["employee_id"])
+        for delta in request["deltas"]:
+            save_day_delta(request["employee_id"], request["computer"], request["open"], delta)
+        LIVE[request["employee_id"]] = {key: request[key] for key in ("status", "app", "mouse", "reason")}
+        LIVE[request["employee_id"]]["time"] = time.time()
+        return {"settings": load_settings()}    # ажилтан «гарсан» гэж үзэх хугацааг эндээс мэднэ
     if request["action"] == "pause":
         save_pause(request["employee_id"], request["reason"])
         return {"ok": True}
@@ -158,9 +216,9 @@ def receive(conn):
 
 
 # ---------------------------------------------------------------- клиент (ажилтны компьютер)
-def ask(host, request):
+def ask(host, request, timeout=3):
     """Админы сервер рүү JSON хүсэлт илгээж хариу авна. Холбогдохгүй бол OSError."""
-    with socket.create_connection((host, PORT), timeout=3) as conn:
+    with socket.create_connection((host, PORT), timeout=timeout) as conn:
         conn.sendall(json.dumps(request, ensure_ascii=False).encode())
         conn.shutdown(socket.SHUT_WR)          # «илгээж дууслаа» гэж мэдэгдэнэ
         result = json.loads(receive(conn))
