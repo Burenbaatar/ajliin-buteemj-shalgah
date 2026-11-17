@@ -2,8 +2,8 @@
 
 Админ:   ажилтан бүртгэх, бүх хүний програм, сайтын хугацаа, түр зогсоосон шалтгаан, камерын шалгалтыг харах.
          Админы компьютер сервер болно.
-Ажилтан: камер (амьд хүн мөн эсэх, ажилтан өөрөө сууж байгаа эсэх), өөрийн идэвхийн хэмжилт.
-         Үр дүнг админы сервер рүү JSON-оор илгээнэ.
+Ажилтан: админы серверт нэвтэрмэгц камер асаж, амьд хүн мөн эсэх, ажилтан өөрөө сууж байгаа эсэхийг шалгана.
+         Өөрийн идэвхийн хэмжилт. Үр дүнг админы сервер рүү JSON-оор илгээнэ.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
@@ -119,6 +119,7 @@ class ProductivityApp(tk.Tk):
             return self.show_error(error)
         self.open_tabs("Ажилтан: " + self.me["name"],
                        [("Камер", self.build_camera), ("Компьютерийн идэвх", self.build_activity)])
+        self.start_watching()                          # серверт холбогдмогц камер шууд ажиллана
 
     def open_admin(self):
         password = self.password_entry.get()
@@ -230,6 +231,14 @@ class ProductivityApp(tk.Tk):
         self.video_label = ttk.Label(frame)
         self.video_label.pack(pady=8)
 
+    def start_watching(self):
+        """Камер асааж, амьд хүн мөн эсэх, бүртгэлтэй ажилтан өөрөө сууж байгаа эсэхийг шалгаж эхэлнэ.
+        Хугацааг зөвхөн хэмжилт явагдаж байх үед тоолно."""
+        self.start_camera()
+        if self.camera_service and self.monitor is None:
+            self.monitor = FaceMonitor(self.me.get("face"))
+            self.last_check = None
+
     def start_camera(self):
         if self.camera_service:                        # аль хэдийн нээлттэй
             return
@@ -315,8 +324,8 @@ class ProductivityApp(tk.Tk):
     def build_activity(self, frame):
         ttk.Label(frame, wraplength=1000, text="Хэмжилт зөвхөн «Хэмжилт эхлэх» дарсны дараа, зөвшөөрөлтэйгээр "
                   "эхэлнэ. Урд талын програм, танигдсан сайтын (YouTube, Facebook, Instagram, Gmail) нэр, "
-                  "хугацааг л бүртгээд админ руу илгээнэ. Камер хэмжилттэй хамт асаж, амьд хүн мөн эсэх, "
-                  "бүртгэлтэй ажилтан өөрөө сууж байгаа эсэхийг шалгана. «Дуусгах» дарахад унтарна."
+                  "хугацааг л бүртгээд админ руу илгээнэ. Камер админы серверт нэвтэрмэгц асаж, амьд хүн мөн "
+                  "эсэх, бүртгэлтэй ажилтан өөрөө сууж байгаа эсэхийг шалгана. Хэмжилтийн үеэр камер хаагдахгүй."
                   ).pack(anchor="w", pady=(0, 8))
         buttons = row(frame)
         button(buttons, "Хэмжилт эхлэх", self.start_activity)
@@ -347,10 +356,7 @@ class ProductivityApp(tk.Tk):
             self.tracker = ActivityTracker()
             self.tracker.start()
             self.update_usage_graph({})
-        self.start_camera()                            # камер хэмжилттэй хамт автоматаар асна
-        if self.camera_service and self.monitor is None:
-            self.monitor = FaceMonitor(self.me.get("face"))
-            self.last_check = None
+        self.start_watching()                          # камерыг хаасан эсвэл нэвтрэхэд нээгдээгүй бол дахин асаана
 
     def pause_activity(self):
         """Түр зогсоохдоо шалтгаан асууж админ руу илгээнэ."""
@@ -376,8 +382,7 @@ class ProductivityApp(tk.Tk):
         self.tracker = None
         if self.monitor:
             summary["camera"] = self.monitor.summary()   # хэн хэдэн секунд суусан
-            self.monitor = None
-        self.stop_camera()                             # хэмжилт дуусахад камер хамт унтарна
+            self.monitor.reset()                       # камер асаалттай үлдэнэ, дараагийн хэмжилт 0-ээс тоолно
         self.update_usage_graph(summary["apps"])
         try:
             reg.ask(self.host, {"action": "activity", "employee_id": self.me["id"], "summary": summary})

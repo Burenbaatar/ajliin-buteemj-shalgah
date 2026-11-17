@@ -282,3 +282,8 @@ class FaceMonitor:
     def summary(self):
         return dict({name + "_seconds": round(seconds, 1) for name, seconds in self.seconds.items()},
                     liveness_failures=self.failures)
+
+    def reset(self):
+        """Дараагийн хэмжилтэд зориулж тоолуурыг тэглэнэ. Шалгалт, таних нь тасралтгүй үргэлжилнэ."""
+        self.seconds = dict.fromkeys(self.seconds, 0.0)
+        self.failures = 0
