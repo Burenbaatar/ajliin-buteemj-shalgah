@@ -6,15 +6,23 @@ import time
 
 def active_app():
     """Урд талын цонх аль програмынх болохыг Windows-оос асууна (жишээ нь Code.exe).
-    Цонхны гарчиг биш, зөвхөн програмын нэр — хувийн бичвэр авахгүй."""
+    Програмын нэр болон танигдсан сайтын нэрийг уншина; хуудасны агуулга авахгүй."""
     user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    hwnd = user32.GetForegroundWindow()
     pid = ctypes.c_ulong()
-    user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ctypes.byref(pid))
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     process = kernel32.OpenProcess(0x1000, False, pid.value)          # 0x1000 = зөвхөн нэр унших эрх
     path, size = ctypes.create_unicode_buffer(260), ctypes.c_ulong(260)
     kernel32.QueryFullProcessImageNameW(process, 0, path, ctypes.byref(size))
     kernel32.CloseHandle(process)
-    return os.path.basename(path.value) or "тодорхойгүй"
+    app = os.path.basename(path.value) or "тодорхойгүй"
+    title = ctypes.create_unicode_buffer(512)
+    user32.GetWindowTextW(hwnd, title, len(title))
+    title = title.value.casefold()
+    for site in ("YouTube", "Facebook", "Instagram", "Gmail"):
+        if site.casefold() in title:
+            return f"{app} - {site}"
+    return app
 
 
 class ActivityTracker:

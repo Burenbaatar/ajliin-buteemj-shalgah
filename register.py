@@ -28,26 +28,12 @@ def list_employees():
     return load("employees")
 
 
-def add_employee(name, target):
+def add_employee(name):
     if not name.strip():
         raise ValueError("Ажилтны нэр хоосон байна.")
-    if target <= 0:
-        raise ValueError("Төлөвлөсөн даалгавар 0-ээс их байх ёстой.")
-    employee = {"id": str(time.time_ns()), "name": name.strip(), "target": target, "completed": 0}
+    employee = {"id": str(time.time_ns()), "name": name.strip()}
     save("employees", load("employees") + [employee])
     return employee
-
-
-def update_progress(employee_id, completed):
-    employees = load("employees")
-    for employee in employees:
-        if employee["id"] == employee_id:
-            if not 0 <= completed <= employee["target"]:
-                raise ValueError("Гүйцэтгэл 0-ээс төлөвлөсөн тоо хүртэл байна.")
-            employee["completed"] = completed
-            save("employees", employees)
-            return employee
-    raise ValueError("Ажилтан олдсонгүй.")
 
 
 def delete_employee(employee_id):
@@ -56,7 +42,3 @@ def delete_employee(employee_id):
 
 def save_activity(employee_id, summary):
     save("activity", load("activity") + [dict(summary, employee_id=employee_id)])
-
-
-def save_report(employee_id, report):
-    save("reports", load("reports") + [dict(report, employee_id=employee_id)])

@@ -4,7 +4,6 @@ from tkinter import ttk, messagebox
 
 import cv2
 
-import productivity as prod                 # 5-р гишүүн
 import register as reg                      # 2-р гишүүн
 from activity import ActivityTracker        # 4-р гишүүн
 from camera import CameraService            # 3-р гишүүн
@@ -31,14 +30,13 @@ def entry(parent, text, width):
 class ProductivityApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Ажилтны бүтээмж")
+        self.title("Ажилтны идэвх")
         self.geometry("900x640")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.employees = []            # register.py-ээс уншсан ажилтнууд
         self.camera_service = None
         self.camera_job = None
         self.tracker = None            # идэвх хэмжиж байгаа үед ActivityTracker
-        self.summaries = {}            # ажилтны id → идэвхийн хураангуй
 
         top = row(self)
         top.pack_configure(padx=10, pady=8)
@@ -49,7 +47,7 @@ class ProductivityApp(tk.Tk):
         tabs = ttk.Notebook(self)
         tabs.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         for title, build in (("Ажилтны бүртгэл", self.build_employee), ("Камер", self.build_camera),
-                             ("Компьютерийн идэвх", self.build_activity), ("Бүтээмж", self.build_productivity)):
+                             ("Компьютерийн идэвх", self.build_activity)):
             frame = ttk.Frame(tabs, padding=10)
             tabs.add(frame, text=title)
             build(frame)
@@ -68,32 +66,27 @@ class ProductivityApp(tk.Tk):
     def build_employee(self, frame):
         form = row(frame)
         self.name_entry = entry(form, "Нэр:", 22)
-        self.target_entry = entry(form, "Төлөвлөсөн даалгавар:", 6)
         button(form, "Бүртгэх", self.add_employee_ui)
         button(form, "Жагсаалт шинэчлэх", self.refresh_employees)
         button(form, "Устгах", self.delete_selected_ui)
-        self.tree = ttk.Treeview(frame, columns=("Нэр", "Төлөвлөсөн", "Дууссан"), show="headings")
+        self.tree = ttk.Treeview(frame, columns=("Нэр",), show="headings")
         for column in self.tree["columns"]:
             self.tree.heading(column, text=column)
         self.tree.pack(fill="both", expand=True)
 
     def add_employee_ui(self):
-        target = self.target_entry.get()
-        if not target.isdigit():
-            return self.show_error("Төлөвлөсөн даалгаврыг тоогоор бичнэ үү.")
         try:
-            reg.add_employee(self.name_entry.get(), int(target))
+            reg.add_employee(self.name_entry.get())
         except (ValueError, OSError) as error:
             return self.show_error(error)
         self.name_entry.delete(0, "end")
-        self.target_entry.delete(0, "end")
         self.refresh_employees()
 
     def refresh_employees(self):
         self.employees = reg.list_employees()
         self.tree.delete(*self.tree.get_children())
         for emp in self.employees:
-            self.tree.insert("", "end", iid=emp["id"], values=(emp["name"], emp["target"], emp["completed"]))
+            self.tree.insert("", "end", iid=emp["id"], values=(emp["name"],))
         self.emp_combo["values"] = [emp["name"] for emp in self.employees]
         if self.emp_combo.current() < 0:               # сонгосон ажилтан байхгүй бол эхнийхийг сонгоно
             self.emp_combo.set(self.employees[0]["name"] if self.employees else "")
@@ -154,6 +147,20 @@ class ProductivityApp(tk.Tk):
         button(buttons, "Дуусгах", self.finish_activity)
         self.activity_label = ttk.Label(frame, text="Хэмжилт эхлээгүй.", font=("Segoe UI", 12))
         self.activity_label.pack(pady=10)
+        self.usage_graph = tk.Canvas(frame, height=320, background="white")
+        self.usage_graph.pack(fill="both", expand=True)
+
+    def update_usage_graph(self, apps):
+        self.usage_graph.delete("all")
+        items = sorted(apps.items(), key=lambda item: item[1], reverse=True)[:8]
+        maximum = max((seconds for _, seconds in items), default=1)
+        for index, (name, seconds) in enumerate(items):
+            y = 18 + index * 36
+            self.usage_graph.create_text(8, y + 10, text=name, anchor="w")
+            width = 480 * seconds / maximum
+            self.usage_graph.create_rectangle(190, y, 190 + width, y + 20, fill="#4a90d9", outline="")
+            value = f"{seconds:.0f} сек" if seconds < 60 else f"{seconds / 60:.1f} мин"
+            self.usage_graph.create_text(680, y + 10, text=value, anchor="e")
 
     def start_activity(self):
         if self.tracker:                               # түр зогсоосон хэмжилтийг үргэлжлүүлнэ
@@ -163,6 +170,7 @@ class ProductivityApp(tk.Tk):
             return self.show_error("Дээрээс ажилтан сонгоно уу.")
         self.tracker = ActivityTracker()
         self.tracker.start()
+        self.update_usage_graph({})
 
     def pause_activity(self):
         if self.tracker:
@@ -173,8 +181,8 @@ class ProductivityApp(tk.Tk):
             return
         summary = self.tracker.stop()
         self.tracker = None
-        self.summaries[self.activity_employee["id"]] = summary
         reg.save_activity(self.activity_employee["id"], summary)
+        self.update_usage_graph(summary["apps"])
         self.activity_label.config(text=f"{self.activity_employee['name']}: {summary['total_seconds']:.0f} сек — хадгаллаа")
 
     def tick(self):
@@ -184,32 +192,7 @@ class ProductivityApp(tk.Tk):
             info = self.tracker.tick()
             self.activity_label.config(text=f"{self.activity_employee['name']}: {info['app'] or '—'} · "
                                             f"{info['total_seconds']:.0f} сек")
-
-    # ---------------------------------------------------------- 4. Бүтээмж
-    def build_productivity(self, frame):
-        form = row(frame)
-        self.completed_entry = entry(form, "Гүйцэтгэсэн даалгавар:", 6)
-        button(form, "Хувь бодох", self.calculate_ui)
-        self.percent_label = ttk.Label(frame, text="—", font=("Segoe UI", 32, "bold"))
-        self.percent_label.pack(pady=10)
-        self.report_box = tk.Text(frame, height=10)
-        self.report_box.pack(fill="both", expand=True)
-
-    def calculate_ui(self):
-        employee = self.selected_employee()
-        completed = self.completed_entry.get()
-        if employee is None or not completed.isdigit():
-            return self.show_error("Ажилтан сонгоод гүйцэтгэсэн даалгаврыг тоогоор бичнэ үү.")
-        try:
-            employee = reg.update_progress(employee["id"], int(completed))
-            report = prod.build_report(employee, self.summaries.get(employee["id"], {}))
-            reg.save_report(employee["id"], report)
-        except (ValueError, OSError) as error:
-            return self.show_error(error)
-        self.percent_label.config(text=f"{report['completion_rate']}%")
-        self.report_box.delete("1.0", "end")
-        self.report_box.insert("1.0", prod.report_text(report))
-        self.refresh_employees()
+            self.update_usage_graph(self.tracker.apps)
 
     def on_close(self):
         if messagebox.askokcancel("Гарах", "Програмыг хаах уу?", parent=self):
