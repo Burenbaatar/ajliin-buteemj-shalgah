@@ -1,10 +1,10 @@
 """1-р гишүүн — Tkinter GUI. Нэвтрэхэд ажилтан эсвэл админы эрхээр өөр табууд нээгдэнэ.
 
-Админ:   ажилтан бүртгэх, гүйцэтгэл оруулах, бүх хүний бүтээмж харах. Админы компьютер сервер болно.
+Админ:   ажилтан бүртгэх, бүх хүний програм, сайтын хугацаа, түр зогсоосон шалтгааныг харах. Админы компьютер сервер болно.
 Ажилтан: камер, өөрийн идэвхийн хэмжилт. Үр дүнг админы сервер рүү JSON-оор илгээнэ.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 
 import cv2
 
@@ -168,7 +168,8 @@ class ProductivityApp(tk.Tk):
     def build_overview(self, frame):
         ttk.Label(frame, foreground="gray", text="Ажилтан бүрийн бүх хэмжилтийн нийлбэр. YouTube, Facebook, Instagram, "
                   "Gmail нь браузерын идэвхтэй таб дээр байсан хугацаа.").pack(anchor="w", pady=(0, 6))
-        self.overview = table(frame, ("Нэр", "Нийт") + SITES + ("Хамгийн их програм",))
+        self.overview = table(frame, ("Нэр", "Нийт") + SITES + ("Хамгийн их програм", "Түр зогсох шалтгаан"))
+        self.overview.column("Түр зогсох шалтгаан", width=150)
 
     def overview_loop(self):
         """5 секунд тутам шинэчилнэ — ажилтнуудын илгээсэн идэвх энд харагдана."""
@@ -181,8 +182,9 @@ class ProductivityApp(tk.Tk):
         for emp in reg.list_employees():
             apps = prod.total_apps(reg.activities(emp["id"]))
             sites = [prod.minutes(seconds) for seconds in prod.site_times(apps).values()]
+            reason = reg.last_pause(emp["id"]).get("reason", "")
             self.overview.insert("", "end", values=[emp["name"], prod.minutes(sum(apps.values()))] + sites
-                                 + [prod.top_app(apps)])
+                                 + [prod.top_app(apps), reason])
 
     # ---------------------------------------------------------- ажилтан: камер
     def build_camera(self, frame):
@@ -257,8 +259,20 @@ class ProductivityApp(tk.Tk):
         self.update_usage_graph({})
 
     def pause_activity(self):
-        if self.tracker:
+        """Түр зогсоохдоо шалтгаан асууж админ руу илгээнэ."""
+        if self.tracker and self.tracker.last is not None:     # хэмжиж байгаа үед л (аль хэдийн зогссон бол асуухгүй)
+            reason = simpledialog.askstring("Түр зогсоох", "Ямар шалтгаанаар түр зогсоож байна вэ?", parent=self)
+            if reason is None:
+                return
+            reason = reason.strip()
+            if not reason:
+                return self.show_error("Шалтгаанаа бичнэ үү.")
+            try:
+                reg.ask(self.host, {"action": "pause", "employee_id": self.me["id"], "reason": reason})
+            except (ValueError, OSError) as error:
+                return self.show_error(f"Админ руу илгээж чадсангүй: {error}")
             self.tracker.pause()
+            self.activity_label.config(text=f"Түр зогсоосон — админд илгээлээ: {reason}")
 
     def finish_activity(self):
         """Хэмжилтийг дуусгаад хураангуйг админы сервер рүү илгээнэ."""
@@ -276,7 +290,7 @@ class ProductivityApp(tk.Tk):
     def tick(self):
         """Секунд тутам идэвхийг хэмжиж харуулна."""
         self.after(1000, self.tick)
-        if self.tracker:
+        if self.tracker and self.tracker.last is not None:         # түр зогсоосон үед бичгийг дарахгүй
             info = self.tracker.tick()
             self.activity_label.config(text=f"{info['app'] or '—'} · {info['total_seconds']:.0f} сек")
             self.update_usage_graph(self.tracker.apps)
