@@ -49,6 +49,7 @@ class ActivityTracker:
         self.running = False
         self.paused = False
         self.started_at = None
+        self.ended_at = None
         self.last_tick = None
         self.app_seconds = defaultdict(float)
         self.current_app = None
@@ -57,7 +58,8 @@ class ActivityTracker:
         current_app = foreground_app_name()
         now = time.monotonic()
         self.app_seconds.clear()
-        self.started_at = now
+        self.started_at = timestamp_now()
+        self.ended_at = None
         self.last_tick = now
         self.current_app = current_app
         self.running = True
@@ -88,11 +90,24 @@ class ActivityTracker:
         self.paused = False
 
     def stop(self):
+        if self.ended_at is not None:
+            return self._summary()
         if self.running and not self.paused:
             self.tick()
         self.running = False
         self.paused = False
-        return dict(self.app_seconds)
+        if self.started_at is not None:
+            self.ended_at = timestamp_now()
+        return self._summary()
+
+    def _summary(self):
+        apps = dict(self.app_seconds)
+        return {
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "total_seconds": sum(apps.values()),
+            "apps": apps,
+        }
 
 
 class ActivityApp:
