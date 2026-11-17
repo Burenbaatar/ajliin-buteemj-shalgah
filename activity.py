@@ -90,7 +90,7 @@ class ActivityTracker:
         self.open = []
         self.status = "away"
         self.paused = False
-        self.verified = True    # False бол ажилласан гэж тоолохгүй (камер ажилтныг өөрийг нь баталгаажуулаагүй)
+        self.verified = True    # False бол ажилласан гэж тоолохгүй (ажиллаж буй камер ажилтныг баталгаажуулаагүй)
         self.last = None        # сүүлд хэмжсэн мөч; None = хэмжихгүй
         self.delta = empty_delta()
 
