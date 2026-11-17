@@ -1,7 +1,11 @@
-"""2-р гишүүн — ажилтны бүртгэл ба JSON хадгалалт."""
+"""2-р гишүүн — ажилтны бүртгэл, JSON хадгалалт ба админы JSON сервер."""
+import hashlib
 import json
 import os
+import socket
 import time
+
+PORT = 5050                                    # ажилтнууд админы компьютерийн энэ порт руу холбогдоно
 
 
 def get_data_dir():
@@ -58,5 +62,88 @@ def save_activity(employee_id, summary):
     save("activity", load("activity") + [dict(summary, employee_id=employee_id)])
 
 
+def last_activity(employee_id):
+    """Ажилтны хамгийн сүүлийн идэвхийн хураангуй. Байхгүй бол хоосон dict."""
+    found = [item for item in load("activity") if item["employee_id"] == employee_id]
+    return found[-1] if found else {}
+
+
 def save_report(employee_id, report):
     save("reports", load("reports") + [dict(report, employee_id=employee_id)])
+
+
+# ---------------------------------------------------------------- админы эрх
+def check_password(password):
+    """Админы нууц үгийг шалгана. Анх оруулсан нууц үг хадгалагдана — файлд зөвхөн хэш нь бичигдэнэ."""
+    hashed = hashlib.sha256(password.encode()).hexdigest()
+    saved = load("admin")
+    if not saved:
+        save("admin", [hashed])
+        return True
+    return saved[0] == hashed
+
+
+# ---------------------------------------------------------------- JSON сервер (админы компьютер)
+def start_server():
+    """Админы компьютер дээр сервер нээнэ."""
+    server = socket.socket()
+    server.bind(("0.0.0.0", PORT))
+    server.listen()
+    server.setblocking(False)                  # хүсэлт байхгүй үед хүлээхгүй — цонх гацахгүй
+    return server
+
+
+def serve(server):
+    """Ирсэн хүсэлт бүрт JSON хариу өгнө. main.py үүнийг 0.1 сек тутам дуудна."""
+    while True:
+        try:
+            conn, _ = server.accept()
+        except BlockingIOError:                # хүлээж буй хүсэлт алга
+            return
+        with conn:
+            try:
+                conn.settimeout(3)
+                conn.sendall(json.dumps(answer(conn), ensure_ascii=False).encode())
+            except OSError:                    # ажилтны компьютер холболтоо тасалсан
+                pass
+
+
+def answer(conn):
+    try:
+        return handle(json.loads(receive(conn)))
+    except (ValueError, KeyError) as error:
+        return {"error": str(error)}
+
+
+def handle(request):
+    """Ажилтны хүсэлт: нэрсийн жагсаалт авах эсвэл идэвхийн хураангуй хадгалуулах."""
+    if request["action"] == "employees":       # бусдын даалгавар, хувийг ажилтанд илгээхгүй
+        return {"employees": [{"id": e["id"], "name": e["name"]} for e in list_employees()]}
+    if request["action"] == "activity":
+        if request["employee_id"] not in [e["id"] for e in list_employees()]:
+            raise ValueError("Ажилтан олдсонгүй.")
+        save_activity(request["employee_id"], request["summary"])
+        return {"ok": True}
+    raise ValueError("Үл мэдэгдэх хүсэлт.")
+
+
+def receive(conn):
+    """Нөгөө тал илгээж дуустал бүх өгөгдлийг уншина."""
+    data = b""
+    while True:
+        chunk = conn.recv(65536)
+        if not chunk:
+            return data.decode()
+        data += chunk
+
+
+# ---------------------------------------------------------------- клиент (ажилтны компьютер)
+def ask(host, request):
+    """Админы сервер рүү JSON хүсэлт илгээж хариу авна. Холбогдохгүй бол OSError."""
+    with socket.create_connection((host, PORT), timeout=3) as conn:
+        conn.sendall(json.dumps(request, ensure_ascii=False).encode())
+        conn.shutdown(socket.SHUT_WR)          # «илгээж дууслаа» гэж мэдэгдэнэ
+        result = json.loads(receive(conn))
+    if "error" in result:
+        raise ValueError(result["error"])
+    return result

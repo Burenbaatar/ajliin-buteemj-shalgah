@@ -1,4 +1,8 @@
-"""1-р гишүүн — Tkinter GUI. Бусад 4 гишүүний модулийг нэг цонхонд холбоно."""
+"""1-р гишүүн — Tkinter GUI. Нэвтрэхэд ажилтан эсвэл админы эрхээр өөр табууд нээгдэнэ.
+
+Админ:   ажилтан бүртгэх, гүйцэтгэл оруулах, бүх хүний бүтээмж харах. Админы компьютер сервер болно.
+Ажилтан: камер, өөрийн идэвхийн хэмжилт. Үр дүнг админы сервер рүү JSON-оор илгээнэ.
+"""
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -8,6 +12,8 @@ import productivity as prod                 # 5-р гишүүн
 import register as reg                      # 2-р гишүүн
 from activity import ActivityTracker        # 4-р гишүүн
 from camera import CameraService            # 3-р гишүүн
+
+BOLD = ("Segoe UI", 12, "bold")
 
 
 def row(parent):
@@ -28,43 +34,115 @@ def entry(parent, text, width):
     return field
 
 
+def table(parent, columns):
+    tree = ttk.Treeview(parent, columns=columns, show="headings")
+    for column in columns:
+        tree.heading(column, text=column)
+        tree.column(column, width=100)                 # бүх багана цонхонд багтана
+    tree.pack(fill="both", expand=True)
+    return tree
+
+
 class ProductivityApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Ажилтны бүтээмж")
         self.geometry("900x640")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.employees = []            # register.py-ээс уншсан ажилтнууд
+        self.server = None             # админ нэвтэрсэн үед JSON сервер
         self.camera_service = None
         self.camera_job = None
         self.tracker = None            # идэвх хэмжиж байгаа үед ActivityTracker
-        self.summaries = {}            # ажилтны id → идэвхийн хураангуй
-
-        top = row(self)
-        top.pack_configure(padx=10, pady=8)
-        ttk.Label(top, text="Ажилтан:").pack(side="left")
-        self.emp_combo = ttk.Combobox(top, state="readonly", width=30)
-        self.emp_combo.pack(side="left", padx=6)
-
-        tabs = ttk.Notebook(self)
-        tabs.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        for title, build in (("Ажилтны бүртгэл", self.build_employee), ("Камер", self.build_camera),
-                             ("Компьютерийн идэвх", self.build_activity), ("Бүтээмж", self.build_productivity)):
-            frame = ttk.Frame(tabs, padding=10)
-            tabs.add(frame, text=title)
-            build(frame)
-
-        self.refresh_employees()
+        self.build_login()
         self.after(1000, self.tick)
 
     def show_error(self, text):
         messagebox.showerror("Алдаа", str(text), parent=self)
 
+    # ---------------------------------------------------------- нэвтрэх
+    def build_login(self):
+        self.login = ttk.Frame(self, padding=20)
+        self.login.pack(fill="x")
+        ttk.Label(self.login, text="Ажилтан", font=BOLD).pack(anchor="w", pady=(0, 6))
+        form = row(self.login)
+        self.host_entry = entry(form, "Админы компьютер:", 20)
+        self.host_entry.insert(0, "127.0.0.1")
+        button(form, "Холбогдох", self.connect)
+        form = row(self.login)
+        ttk.Label(form, text="Нэр:").pack(side="left")
+        self.login_combo = ttk.Combobox(form, state="readonly", width=25)
+        self.login_combo.pack(side="left", padx=4)
+        button(form, "Нэвтрэх", self.open_employee)
+        ttk.Label(self.login, text="Админ", font=BOLD).pack(anchor="w", pady=(24, 6))
+        form = row(self.login)
+        self.password_entry = entry(form, "Нууц үг:", 20)
+        self.password_entry.config(show="*")
+        button(form, "Админаар нэвтрэх", self.open_admin)
+        ttk.Label(self.login, foreground="gray", text="Анх нэвтрэхэд оруулсан нууц үг админы нууц үг болно.").pack(
+            anchor="w")
+
+    def connect(self):
+        """Админы серверээс ажилтнуудын нэрсийг авна."""
+        try:
+            self.people = reg.ask(self.host_entry.get().strip(), {"action": "employees"})["employees"]
+        except (OSError, ValueError) as error:
+            return self.show_error(f"Админы компьютертэй холбогдсонгүй: {error}")
+        self.login_combo["values"] = [person["name"] for person in self.people]
+        if self.people:
+            self.login_combo.current(0)
+
+    def open_tabs(self, title, pages):
+        """Нэвтрэх хэсгийг хаагаад тухайн эрхийн табуудыг нээнэ."""
+        self.login.destroy()
+        top = row(self)
+        top.pack_configure(padx=10, pady=8)
+        ttk.Label(top, text=title, font=BOLD).pack(side="left", padx=(0, 20))
+        tabs = ttk.Notebook(self)
+        tabs.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        for name, build in pages:
+            frame = ttk.Frame(tabs, padding=10)
+            tabs.add(frame, text=name)
+            build(frame)
+        return top
+
+    def open_employee(self):
+        index = self.login_combo.current()
+        if index < 0:
+            return self.show_error("Эхлээд «Холбогдох» дараад нэрээ сонгоно уу.")
+        self.me = self.people[index]
+        self.host = self.host_entry.get().strip()
+        self.open_tabs("Ажилтан: " + self.me["name"],
+                       [("Камер", self.build_camera), ("Компьютерийн идэвх", self.build_activity)])
+
+    def open_admin(self):
+        password = self.password_entry.get()
+        if not password:
+            return self.show_error("Нууц үгээ бичнэ үү.")
+        if not reg.check_password(password):
+            return self.show_error("Нууц үг буруу.")
+        try:
+            self.server = reg.start_server()
+        except OSError:
+            return self.show_error("Сервер асаж чадсангүй. Админы програм аль хэдийн нээлттэй байж магадгүй.")
+        top = self.open_tabs("Админ", [("Ажилтны бүртгэл", self.build_employee), ("Бүтээмж", self.build_productivity),
+                                       ("Ажлын бүтээмж", self.build_overview)])
+        ttk.Label(top, text="Ажилтан:").pack(side="left")
+        self.emp_combo = ttk.Combobox(top, state="readonly", width=30)
+        self.emp_combo.pack(side="left", padx=6)
+        self.refresh_employees()
+        self.overview_loop()
+        self.serve_loop()
+
+    def serve_loop(self):
+        """0.1 сек тутам ажилтнуудын JSON хүсэлтэд хариулна."""
+        self.after(100, self.serve_loop)
+        reg.serve(self.server)
+
+    # ---------------------------------------------------------- админ: ажилтны бүртгэл
     def selected_employee(self):
         index = self.emp_combo.current()
         return self.employees[index] if index >= 0 else None
 
-    # ---------------------------------------------------------- 1. Ажилтны бүртгэл
     def build_employee(self, frame):
         form = row(frame)
         self.name_entry = entry(form, "Нэр:", 22)
@@ -72,10 +150,7 @@ class ProductivityApp(tk.Tk):
         button(form, "Бүртгэх", self.add_employee_ui)
         button(form, "Жагсаалт шинэчлэх", self.refresh_employees)
         button(form, "Устгах", self.delete_selected_ui)
-        self.tree = ttk.Treeview(frame, columns=("Нэр", "Төлөвлөсөн", "Дууссан"), show="headings")
-        for column in self.tree["columns"]:
-            self.tree.heading(column, text=column)
-        self.tree.pack(fill="both", expand=True)
+        self.tree = table(frame, ("Нэр", "Төлөвлөсөн", "Дууссан"))
 
     def add_employee_ui(self):
         target = self.target_entry.get()
@@ -97,6 +172,7 @@ class ProductivityApp(tk.Tk):
         self.emp_combo["values"] = [emp["name"] for emp in self.employees]
         if self.emp_combo.current() < 0:               # сонгосон ажилтан байхгүй бол эхнийхийг сонгоно
             self.emp_combo.set(self.employees[0]["name"] if self.employees else "")
+        self.refresh_overview()
 
     def delete_selected_ui(self):
         employee_id = self.tree.focus()
@@ -106,7 +182,51 @@ class ProductivityApp(tk.Tk):
             reg.delete_employee(employee_id)
             self.refresh_employees()
 
-    # ---------------------------------------------------------- 2. Камер
+    # ---------------------------------------------------------- админ: бүтээмж
+    def build_productivity(self, frame):
+        form = row(frame)
+        self.completed_entry = entry(form, "Гүйцэтгэсэн даалгавар:", 6)
+        button(form, "Хувь бодох", self.calculate_ui)
+        self.percent_label = ttk.Label(frame, text="—", font=("Segoe UI", 32, "bold"))
+        self.percent_label.pack(pady=10)
+        self.report_box = tk.Text(frame, height=10)
+        self.report_box.pack(fill="both", expand=True)
+
+    def calculate_ui(self):
+        employee = self.selected_employee()
+        completed = self.completed_entry.get()
+        if employee is None or not completed.isdigit():
+            return self.show_error("Ажилтан сонгоод гүйцэтгэсэн даалгаврыг тоогоор бичнэ үү.")
+        try:
+            employee = reg.update_progress(employee["id"], int(completed))
+            report = prod.build_report(employee, reg.last_activity(employee["id"]))   # сүүлийн идэвх
+            reg.save_report(employee["id"], report)
+        except (ValueError, OSError) as error:
+            return self.show_error(error)
+        self.percent_label.config(text=f"{report['completion_rate']}%")
+        self.report_box.delete("1.0", "end")
+        self.report_box.insert("1.0", prod.report_text(report))
+        self.refresh_employees()
+
+    # ---------------------------------------------------------- админ: ажлын бүтээмж (бүх ажилтан)
+    def build_overview(self, frame):
+        self.overview = table(frame, ("Нэр", "Төлөвлөсөн", "Дууссан", "Биелэлт %", "Сүүлийн идэвх (сек)"))
+
+    def overview_loop(self):
+        """5 секунд тутам шинэчилнэ — ажилтнуудын илгээсэн идэвх энд харагдана."""
+        self.after(5000, self.overview_loop)
+        self.refresh_overview()
+
+    def refresh_overview(self):
+        """Бүх ажилтны бүтээмжийг JSON-оос уншиж хүснэгтэд харуулна."""
+        self.overview.delete(*self.overview.get_children())
+        for emp in reg.list_employees():
+            seconds = reg.last_activity(emp["id"]).get("total_seconds", 0)
+            self.overview.insert("", "end", values=(emp["name"], emp["target"], emp["completed"],
+                                                    prod.calculate_completion(emp["target"], emp["completed"]),
+                                                    f"{seconds:.0f}"))
+
+    # ---------------------------------------------------------- ажилтан: камер
     def build_camera(self, frame):
         buttons = row(frame)
         button(buttons, "Камер нээх", self.start_camera)
@@ -144,10 +264,10 @@ class ProductivityApp(tk.Tk):
             self.video_label.config(image="")
             self.face_label.config(text="Камер хаалттай. Зураг хадгалахгүй.")
 
-    # ---------------------------------------------------------- 3. Компьютерийн идэвх
+    # ---------------------------------------------------------- ажилтан: компьютерийн идэвх
     def build_activity(self, frame):
         ttk.Label(frame, wraplength=700, text="Хэмжилт зөвхөн «Хэмжилт эхлэх» дарсны дараа, зөвшөөрөлтэйгээр "
-                  "эхэлнэ. Урд талын програмын нэр, хугацааг л бүртгэнэ.").pack(anchor="w", pady=(0, 8))
+                  "эхэлнэ. Урд талын програмын нэр, хугацааг л бүртгээд админ руу илгээнэ.").pack(anchor="w", pady=(0, 8))
         buttons = row(frame)
         button(buttons, "Хэмжилт эхлэх", self.start_activity)
         button(buttons, "Түр зогсоох", self.pause_activity)
@@ -158,9 +278,6 @@ class ProductivityApp(tk.Tk):
     def start_activity(self):
         if self.tracker:                               # түр зогсоосон хэмжилтийг үргэлжлүүлнэ
             return self.tracker.resume()
-        self.activity_employee = self.selected_employee()
-        if self.activity_employee is None:
-            return self.show_error("Дээрээс ажилтан сонгоно уу.")
         self.tracker = ActivityTracker()
         self.tracker.start()
 
@@ -169,52 +286,30 @@ class ProductivityApp(tk.Tk):
             self.tracker.pause()
 
     def finish_activity(self):
+        """Хэмжилтийг дуусгаад хураангуйг админы сервер рүү илгээнэ."""
         if not self.tracker:
             return
         summary = self.tracker.stop()
         self.tracker = None
-        self.summaries[self.activity_employee["id"]] = summary
-        reg.save_activity(self.activity_employee["id"], summary)
-        self.activity_label.config(text=f"{self.activity_employee['name']}: {summary['total_seconds']:.0f} сек — хадгаллаа")
+        try:
+            reg.ask(self.host, {"action": "activity", "employee_id": self.me["id"], "summary": summary})
+        except (OSError, ValueError) as error:
+            return self.show_error(f"Админ руу илгээж чадсангүй: {error}")
+        self.activity_label.config(text=f"{summary['total_seconds']:.0f} сек — админ руу илгээлээ")
 
     def tick(self):
         """Секунд тутам идэвхийг хэмжиж харуулна."""
         self.after(1000, self.tick)
         if self.tracker:
             info = self.tracker.tick()
-            self.activity_label.config(text=f"{self.activity_employee['name']}: {info['app'] or '—'} · "
-                                            f"{info['total_seconds']:.0f} сек")
-
-    # ---------------------------------------------------------- 4. Бүтээмж
-    def build_productivity(self, frame):
-        form = row(frame)
-        self.completed_entry = entry(form, "Гүйцэтгэсэн даалгавар:", 6)
-        button(form, "Хувь бодох", self.calculate_ui)
-        self.percent_label = ttk.Label(frame, text="—", font=("Segoe UI", 32, "bold"))
-        self.percent_label.pack(pady=10)
-        self.report_box = tk.Text(frame, height=10)
-        self.report_box.pack(fill="both", expand=True)
-
-    def calculate_ui(self):
-        employee = self.selected_employee()
-        completed = self.completed_entry.get()
-        if employee is None or not completed.isdigit():
-            return self.show_error("Ажилтан сонгоод гүйцэтгэсэн даалгаврыг тоогоор бичнэ үү.")
-        try:
-            employee = reg.update_progress(employee["id"], int(completed))
-            report = prod.build_report(employee, self.summaries.get(employee["id"], {}))
-            reg.save_report(employee["id"], report)
-        except (ValueError, OSError) as error:
-            return self.show_error(error)
-        self.percent_label.config(text=f"{report['completion_rate']}%")
-        self.report_box.delete("1.0", "end")
-        self.report_box.insert("1.0", prod.report_text(report))
-        self.refresh_employees()
+            self.activity_label.config(text=f"{info['app'] or '—'} · {info['total_seconds']:.0f} сек")
 
     def on_close(self):
         if messagebox.askokcancel("Гарах", "Програмыг хаах уу?", parent=self):
-            self.finish_activity()                     # хэмжиж байсан бол хадгална
+            self.finish_activity()                     # хэмжиж байсан бол илгээнэ
             self.stop_camera()
+            if self.server:
+                self.server.close()
             self.destroy()
 
 
