@@ -1,4 +1,4 @@
-"""5-р гишүүн — идэвхийн хураангуй: програм, сайт тус бүрт зарцуулсан хугацаа."""
+"""5-р гишүүн — идэвхийн хураангуй: програм, сайт тус бүрт зарцуулсан хугацаа, камерын шалгалт."""
 from activity import SITES
 
 
@@ -19,6 +19,16 @@ def site_times(apps):
 def top_app(apps):
     """Хамгийн их хугацаа зарцуулсан програм эсвэл сайт."""
     return max(apps, key=apps.get) if apps else "—"
+
+
+def camera_totals(summaries):
+    """Олон хэмжилтийн камерын хураангуйг нэгтгэнэ: {"other_seconds": 12.0, "unverified_seconds": 5.0, ...}.
+    Камер ажиллаагүй хэмжилтүүд тооцогдохгүй. Нэг ч камертай хэмжилт байхгүй бол хоосон dict."""
+    totals = {}
+    for summary in summaries:
+        for name, value in (summary.get("camera") or {}).items():
+            totals[name] = totals.get(name, 0) + value
+    return totals
 
 
 def minutes(seconds):

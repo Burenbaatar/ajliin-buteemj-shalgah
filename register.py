@@ -58,6 +58,30 @@ def add_employee(name, code):
 
 def delete_employee(employee_id):
     save("employees", [employee for employee in load("employees") if employee["id"] != employee_id])
+    save("faces", [face for face in load("faces") if face["employee_id"] != employee_id])   # нүүрний хээг хамт устгана
+
+
+def get_face(employee_id):
+    """Ажилтны нүүрний хээ (128 тоо). Бүртгээгүй бол None."""
+    return next((face["feature"] for face in load("faces") if face["employee_id"] == employee_id), None)
+
+
+def save_face(employee_id, feature):
+    """Зураг биш, зөвхөн нүүрний хээг (128 тоо) админы компьютерт хадгална. Нэг удаа л бүртгэнэ —
+    ажилтан өөрийн нүүрийг өөр хүнийхээр солихоос сэргийлж, шинэчлэхийг зөвхөн админ зөвшөөрнө."""
+    if employee_id not in [employee["id"] for employee in list_employees()]:
+        raise ValueError("Ажилтан олдсонгүй.")
+    if get_face(employee_id):
+        raise ValueError("Нүүр аль хэдийн бүртгэгдсэн. Шинэчлэх бол админд хандана уу.")
+    if not isinstance(feature, list) or len(feature) != 128 or \
+            not all(isinstance(value, (int, float)) for value in feature):
+        raise ValueError("Нүүрний хээ буруу.")
+    save("faces", load("faces") + [{"employee_id": employee_id, "feature": [round(float(v), 5) for v in feature]}])
+
+
+def delete_face(employee_id):
+    """Админ ажилтны нүүрийг устгаснаар ажилтан дахин бүртгүүлэх боломжтой болно."""
+    save("faces", [face for face in load("faces") if face["employee_id"] != employee_id])
 
 
 def save_activity(employee_id, summary):
@@ -130,12 +154,15 @@ def answer(conn):
 
 
 def handle(request):
-    """Ажилтны хүсэлт: нэр, кодоор нэвтрэх эсвэл идэвхийн хураангуй хадгалуулах."""
+    """Ажилтны хүсэлт: нэр, кодоор нэвтрэх, нүүр бүртгүүлэх эсвэл идэвхийн хураангуй хадгалуулах."""
     if request["action"] == "login":           # бусдын мэдээлэл, кодыг ажилтанд илгээхгүй
         for e in list_employees():
             if e["name"].casefold() == request["name"].strip().casefold() and e.get("code") == hash_text(request["code"]):
-                return {"id": e["id"], "name": e["name"]}
+                return {"id": e["id"], "name": e["name"], "face": get_face(e["id"])}   # камер харьцуулах хээ
         raise ValueError("Нэр эсвэл код буруу.")
+    if request["action"] == "face":
+        save_face(request["employee_id"], request["feature"])
+        return {"ok": True}
     if request["action"] == "activity":
         if request["employee_id"] not in [e["id"] for e in list_employees()]:
             raise ValueError("Ажилтан олдсонгүй.")

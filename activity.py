@@ -39,6 +39,11 @@ class ActivityTracker:
     def resume(self):
         self.start()
 
+    @property
+    def running(self):
+        """Яг одоо хэмжиж байна уу (түр зогсоогоогүй)."""
+        return self.last is not None
+
     def pause(self):
         self.tick()
         self.last = None
