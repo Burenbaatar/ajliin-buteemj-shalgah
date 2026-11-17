@@ -359,10 +359,19 @@ class ProductivityApp(tk.Tk):
         """quiet=True (автоматаар асаахад) бол алдааны цонх гаргахгүй, камерын табд бичнэ."""
         if self.camera_service:                        # аль хэдийн нээлттэй
             return
-        self.camera_service = CameraService()
-        if not self.camera_service.start():
+        try:
+            self.camera_service = CameraService()
+            opened = self.camera_service.start()
+            message = ("Камер нээгдсэнгүй. Шалгах зүйл: 1) Zoom, Teams, «Камер» зэрэг өөр програм камер ашиглаж "
+                       "байгаа эсэх; 2) Windows → Тохиргоо → Нууцлал ба аюулгүй байдал → Камер → «Камерт хандах» болон "
+                       "«Ширээний програмуудад камер ашиглахыг зөвшөөрөх» асаалттай эсэх; 3) камерын хаалт (shutter) "
+                       "эсвэл камер унтраах F-товч; 4) Device Manager дээр камерын драйвер.")
+        except (cv2.error, OSError, TypeError) as error:   # загвар ачаалж чадсангүй — OpenCV хуучин, models алга
+            opened, message = False, (f"Камерын нүүр таних загвар ачаалж чадсангүй: {error}\nOpenCV-г шинэчилнэ үү: "
+                                      "python -m pip install -U \"opencv-python>=4.11,<5\". Мөн програмын хажууд "
+                                      "models хавтас байгаа эсэхийг шалгана уу.")
+        if not opened:
             self.camera_service = None
-            message = "Камер нээгдсэнгүй. Камер залгаатай, өөр програм ашиглаагүй эсэхийг шалгана уу."
             if quiet:                                  # камергүй үед гар, хулганы хөдөлгөөнөөр тооцно
                 return self.face_label.config(text=message + " Камер ажиллахгүй үед ажилласан хугацааг гар, "
                                               "хулганы хөдөлгөөнөөр тооцно.", foreground="#9a6700")
@@ -386,6 +395,9 @@ class ProductivityApp(tk.Tk):
                     self.bring_to_front()
                 self.last_check = check
             box, color = CAMERA_COLORS[state]
+            if frame.mean() < 12:                      # бараг хар дүрс — камер «ажиллаж» байгаа ч юу ч харахгүй
+                text = ("Камерын дүрс хар байна: камерын хаалт (shutter) хаалттай, F-товчоор камер унтарсан эсвэл "
+                        "Windows-ийн нууцлалын тохиргоо камерыг хориглосон байж магадгүй.\n" + text)
             draw(frame, faces, box, check.step if check else None)
             frame = cv2.resize(frame, (480, 360))
             photo = tk.PhotoImage(data=cv2.imencode(".ppm", frame)[1].tobytes())   # OpenCV кадр → Tkinter зураг
@@ -530,7 +542,8 @@ class ProductivityApp(tk.Tk):
         self.pending.append(delta)
         request = {"action": "live", "employee_id": self.me["id"], "computer": os.environ.get("COMPUTERNAME", ""),
                    "status": status or tracker.status, "app": tracker.app, "mouse": tracker.mouse_on,
-                   "open": tracker.open, "reason": self.away_reason(), "deltas": self.pending}
+                   "open": tracker.open, "reason": self.away_reason(), "deltas": self.pending,
+                   "camera": self.camera_state is not None}   # False бол самбарт «(камергүй)»
         try:
             answer = reg.ask(self.host, request, timeout=0.5)
             tracker.away_after = answer["settings"]["away_after_sec"]     # админы тохиргоо

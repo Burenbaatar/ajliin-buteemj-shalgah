@@ -65,6 +65,8 @@ def row_for(employee, record, live, settings, now):
     now_text = "● " + STATUS[status]
     if status == "away" and live.get("reason"):
         now_text += f" ({live['reason']})"
+    if live and live.get("camera") is False:          # камер ажиллахгүй — хэн сууж байгааг шалгаагүй
+        now_text += " (камергүй)"
     if live:
         now_text += " · " + ago(now - live["time"])
     late = late_seconds(times[0], settings) if times else 0

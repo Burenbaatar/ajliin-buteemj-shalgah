@@ -10,6 +10,8 @@ import numpy as np
 
 # .exe үед файлууд түр хавтаст (sys._MEIPASS) задардаг, python main.py үед энэ файлын хажууд байна
 MODELS = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "models")
+DETECTOR = "face_detection_yunet_2023mar.onnx"      # нүүр + нүд, хамар, ам (YuNet)
+RECOGNIZER = "face_recognition_sface_2021dec.onnx"  # нүүрний 128 тооны хээ (SFace)
 SAME_PERSON = 0.363        # SFace: cosine ижил төстэй байдал үүнээс их бол нэг хүн (OpenCV-ийн зөвлөмж)
 TURN, CENTER = 0.1, 0.05   # толгой эргүүлсэн / буцаж шууд харсан гэж үзэх хамрын зөрүү (нүдний зайгаар)
 SAME_POSE = 0.1            # толгой эхний байрлалдаа байна гэж үзэх цэгүүдийн зөрүү (нүдний зайгаар)
@@ -86,18 +88,26 @@ class CameraService:
         self.index = index
         self.capture = None
         empty = np.array([], np.uint8)
-        self.detector = cv2.FaceDetectorYN.create("onnx", load_model("face_detection_yunet_2023mar.onnx"),
-                                                  empty, (320, 320), 0.8)          # нүүр + нүд, хамар, ам
-        self.recognizer = cv2.FaceRecognizerSF.create("onnx", load_model("face_recognition_sface_2021dec.onnx"),
-                                                      empty)                        # нүүрний хээ
+        try:                                   # OpenCV 4.11+: санах ойгоос — кирилл үсэгтэй замтай ч ажиллана
+            self.detector = cv2.FaceDetectorYN.create("onnx", load_model(DETECTOR), empty, (320, 320), 0.8)
+            self.recognizer = cv2.FaceRecognizerSF.create("onnx", load_model(RECOGNIZER), empty)
+        except (cv2.error, TypeError):         # OpenCV 4.8–4.10: санах ойгоос уншиж чаддаггүй — файлын замаар
+            self.detector = cv2.FaceDetectorYN.create(os.path.join(MODELS, DETECTOR), "", (320, 320), 0.8)
+            self.recognizer = cv2.FaceRecognizerSF.create(os.path.join(MODELS, RECOGNIZER), "")
         self.eye_detector = load_cascade("haarcascade_eye.xml")                    # зөвхөн НЭЭЛТТЭЙ нүд олдог
 
     def start(self):
-        """Камер нээнэ. Амжилттай бол True."""
-        self.capture = cv2.VideoCapture(self.index, cv2.CAP_DSHOW)   # DSHOW — Windows дээр хурдан нээгдэнэ
-        if not self.capture.isOpened():
-            self.capture = cv2.VideoCapture(self.index)               # болохгүй бол OpenCV өөрөө сонгоно
-        return self.capture.isOpened()
+        """Камер нээнэ. Кадр бодитоор уншиж чадвал True.
+        Зарим зөөврийн компьютер дээр DSHOW «нээгдсэн» гэх боловч кадр өгдөггүй, заримд нь MSMF л ажилладаг,
+        0-р камер нь Windows Hello-ийн IR камер байж болно — тиймээс хэд хэдэн хослолыг туршина."""
+        for index in dict.fromkeys((self.index, 0, 1)):               # давхардалгүй дараалал
+            for backend in (cv2.CAP_DSHOW, cv2.CAP_MSMF):
+                capture = cv2.VideoCapture(index, backend)
+                if capture.isOpened() and any(capture.read()[0] for _ in range(5)):   # эхний кадр хоосон ирж болно
+                    self.capture, self.index = capture, index
+                    return True
+                capture.release()
+        return False
 
     def get_frame(self):
         """(BGR кадр, нүүрнүүд) буцаана. Кадр ирэхгүй бол None.

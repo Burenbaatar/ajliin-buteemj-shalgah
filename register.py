@@ -225,6 +225,7 @@ def handle(request):
         for delta in request["deltas"]:
             save_day_delta(request["employee_id"], request["computer"], request["open"], delta)
         LIVE[request["employee_id"]] = {key: request[key] for key in ("status", "app", "mouse", "reason")}
+        LIVE[request["employee_id"]]["camera"] = request.get("camera")   # камер ажиллаж байгаа эсэх (хуучин програм илгээхгүй)
         LIVE[request["employee_id"]]["time"] = time.time()
         return {"settings": load_settings()}    # ажилтан «гарсан» гэж үзэх хугацааг эндээс мэднэ
     if request["action"] == "pause":
