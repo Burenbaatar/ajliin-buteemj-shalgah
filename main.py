@@ -4,7 +4,7 @@
 Ажилтан: камер, өөрийн идэвхийн хэмжилт. Үр дүнг админы сервер рүү JSON-оор илгээнэ.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 
 import cv2
 
@@ -210,7 +210,9 @@ class ProductivityApp(tk.Tk):
 
     # ---------------------------------------------------------- админ: ажлын бүтээмж (бүх ажилтан)
     def build_overview(self, frame):
-        self.overview = table(frame, ("Нэр", "Төлөвлөсөн", "Дууссан", "Биелэлт %", "Сүүлийн идэвх (сек)"))
+        self.overview = table(frame, ("Нэр", "Төлөвлөсөн", "Дууссан", "Биелэлт %",
+                                      "Сүүлийн идэвх (сек)", "Түр зогсох шалтгаан"))
+        self.overview.column("Түр зогсох шалтгаан", width=250)
 
     def overview_loop(self):
         """5 секунд тутам шинэчилнэ — ажилтнуудын илгээсэн идэвх энд харагдана."""
@@ -222,9 +224,10 @@ class ProductivityApp(tk.Tk):
         self.overview.delete(*self.overview.get_children())
         for emp in reg.list_employees():
             seconds = reg.last_activity(emp["id"]).get("total_seconds", 0)
+            reason = reg.last_pause(emp["id"]).get("reason", "")
             self.overview.insert("", "end", values=(emp["name"], emp["target"], emp["completed"],
                                                     prod.calculate_completion(emp["target"], emp["completed"]),
-                                                    f"{seconds:.0f}"))
+                                                    f"{seconds:.0f}", reason))
 
     # ---------------------------------------------------------- ажилтан: камер
     def build_camera(self, frame):
@@ -300,7 +303,18 @@ class ProductivityApp(tk.Tk):
 
     def pause_activity(self):
         if self.tracker:
+            reason = simpledialog.askstring("Түр зогсоох", "Ямар шалтгаанаар түр зогсоож байна вэ?", parent=self)
+            if reason is None:
+                return
+            reason = reason.strip()
+            if not reason:
+                return self.show_error("Шалтгаанаа бичнэ үү.")
+            try:
+                reg.ask(self.host, {"action": "pause", "employee_id": self.me["id"], "reason": reason})
+            except (ValueError, OSError) as error:
+                return self.show_error(f"Админ руу илгээж чадсангүй: {error}")
             self.tracker.pause()
+            self.activity_label.config(text=f"Түр зогсоосон — админд илгээлээ: {reason}")
 
     def finish_activity(self):
         """Хэмжилтийг дуусгаад хураангуйг админы сервер рүү илгээнэ."""

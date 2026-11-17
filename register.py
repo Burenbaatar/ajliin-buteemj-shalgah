@@ -62,6 +62,22 @@ def save_activity(employee_id, summary):
     save("activity", load("activity") + [dict(summary, employee_id=employee_id)])
 
 
+def save_pause(employee_id, reason):
+    employee = next((e for e in list_employees() if e["id"] == employee_id), None)
+    if employee is None:
+        raise ValueError("Ажилтан олдсонгүй.")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("Шалтгаанаа бичнэ үү.")
+    pause = {"employee_id": employee_id, "employee_name": employee["name"],
+             "reason": reason.strip(), "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+    save("pauses", load("pauses") + [pause])
+
+
+def last_pause(employee_id):
+    found = [item for item in load("pauses") if item["employee_id"] == employee_id]
+    return found[-1] if found else {}
+
+
 def last_activity(employee_id):
     """Ажилтны хамгийн сүүлийн идэвхийн хураангуй. Байхгүй бол хоосон dict."""
     found = [item for item in load("activity") if item["employee_id"] == employee_id]
@@ -123,6 +139,9 @@ def handle(request):
         if request["employee_id"] not in [e["id"] for e in list_employees()]:
             raise ValueError("Ажилтан олдсонгүй.")
         save_activity(request["employee_id"], request["summary"])
+        return {"ok": True}
+    if request["action"] == "pause":
+        save_pause(request["employee_id"], request["reason"])
         return {"ok": True}
     raise ValueError("Үл мэдэгдэх хүсэлт.")
 
