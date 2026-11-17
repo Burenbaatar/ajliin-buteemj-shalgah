@@ -5,10 +5,9 @@ import time
 
 
 def get_data_dir():
-    """Өгөгдлийн хавтас: %LOCALAPPDATA%/ProductivitySystem/data (.exe дотор биш)."""
-    folder = os.path.join(os.environ.get("LOCALAPPDATA", "."), "ProductivitySystem", "data")
-    os.makedirs(folder, exist_ok=True)
-    return folder
+    """Өгөгдлийн хавтас: програмын хажууд байх data хавтас (.exe дотор биш, хаагаад нээсэн ч үлдэнэ)."""
+    os.makedirs("data", exist_ok=True)
+    return "data"
 
 
 def load(name):
