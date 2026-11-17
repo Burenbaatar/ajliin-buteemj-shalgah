@@ -44,6 +44,57 @@ def timestamp_now():
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+class ActivityTracker:
+    def __init__(self):
+        self.running = False
+        self.paused = False
+        self.started_at = None
+        self.last_tick = None
+        self.app_seconds = defaultdict(float)
+        self.current_app = None
+
+    def start(self):
+        current_app = foreground_app_name()
+        now = time.monotonic()
+        self.app_seconds.clear()
+        self.started_at = now
+        self.last_tick = now
+        self.current_app = current_app
+        self.running = True
+        self.paused = False
+
+    def tick(self):
+        if not self.running or self.paused or self.last_tick is None:
+            return
+
+        now = time.monotonic()
+        elapsed = max(0.0, now - self.last_tick)
+        if self.current_app is not None:
+            self.app_seconds[self.current_app] += elapsed
+        self.last_tick = now
+        self.current_app = foreground_app_name()
+
+    def pause(self):
+        if not self.running or self.paused:
+            return
+        self.tick()
+        self.paused = True
+
+    def resume(self):
+        if not self.running or not self.paused:
+            return
+        self.last_tick = time.monotonic()
+        self.current_app = foreground_app_name()
+        self.paused = False
+
+    def stop(self):
+        if self.running and not self.paused:
+            self.tick()
+        self.running = False
+        self.paused = False
+        return dict(self.app_seconds)
+
+
 class ActivityApp:
     def __init__(self, root):
         self.root = root
