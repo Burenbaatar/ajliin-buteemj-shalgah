@@ -1,4 +1,2 @@
-psutil>=5.9
 opencv-python>=4.8,<5
-Pillow
 pyinstaller

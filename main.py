@@ -1,480 +1,222 @@
-"""1-р гишүүн — үндсэн програм: ажилтны цонх, tray, админы самбар. Бусад 4 модулийг энд холбоно.
-
-    python main.py                # цонхтой
-    python main.py --background   # цонхгүй, зөвхөн tray (компьютер асахад ингэж эхэлнэ)
-    python main.py --admin        # энэ компьютерийг админых болгох (сервер + самбар)
-"""
-import json
-import socket
-import sys
-import threading
+"""1-р гишүүн — Tkinter GUI. Бусад 4 гишүүний модулийг нэг цонхонд холбоно."""
 import tkinter as tk
-import winreg
-from datetime import timedelta
-from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import ttk, messagebox
 
 import cv2
-import pystray
-from PIL import Image, ImageDraw, ImageTk
 
-import productivity as prod
-import register as reg
-from activity import ActivityTracker
-from camera import CameraService
-
-COLORS = {"working": "green", "away": "red", "paused": "orange"}
-CAMERA_TEXT = {"ok": "OK", "none": "олдсонгүй", "blocked": "⚠ таглагдсан", "static": "⚠ хөдөлгөөнгүй нүүр"}
-NOTICE = ("Энэ програм камераар таныг компьютерийн өмнө байгаа эсэхийг шалгаж, идэвхтэй аппын нэр, "
-          "ажилласан хугацааг бүртгэнэ. Камерын зураг, дэлгэц, товчлуур хадгалахгүй.")
-SETTING_LABELS = {"work_start": "Ажил эхлэх (ЦЦ:ММ)", "work_end": "Ажил дуусах", "lunch_start": "Цайны цаг эхлэх",
-                  "lunch_end": "Цайны цаг дуусах", "workdays": "Ажлын өдрүүд (1=Даваа ... 7=Ням)",
-                  "late_grace_min": "Хоцролтын хүлцэл (мин)", "away_grace_sec": "Гарсан гэж үзэх (сек)",
-                  "productive_apps": "Бүтээмжтэй аппууд (таслалаар)"}
+import productivity as prod                 # 5-р гишүүн
+import register as reg                      # 2-р гишүүн
+from activity import ActivityTracker        # 4-р гишүүн
+from camera import CameraService            # 3-р гишүүн
 
 
-def single_instance():
-    """Програм давхар ажиллахаас сэргийлнэ: портыг эзэлж чадвал анхных нь."""
-    lock = socket.socket()
-    try:
-        lock.bind(("127.0.0.1", reg.PORT + 1))
-        return lock
-    except OSError:
-        return None
+def row(parent):
+    """Элементүүдийг нэг мөрөнд зүүнээс баруун тийш байрлуулах хүрээ."""
+    frame = ttk.Frame(parent)
+    frame.pack(anchor="w", pady=(0, 8))
+    return frame
 
 
-def set_autostart(on):
-    """Компьютер асахад --background горимоор эхлэх (Windows-ийн Run бүртгэл)."""
-    if getattr(sys, "frozen", False):                   # .exe болгосон үед
-        command = f'"{sys.executable}" --background'
-    else:                                               # pythonw.exe — консол цонхгүй
-        pythonw = Path(sys.executable).with_name("pythonw.exe")
-        command = f'"{pythonw}" "{Path(__file__).resolve()}" --background'
-    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
-                         0, winreg.KEY_SET_VALUE)
-    if on:
-        winreg.SetValueEx(key, "ProductivitySystem", 0, winreg.REG_SZ, command)
-    else:
-        try:
-            winreg.DeleteValue(key, "ProductivitySystem")
-        except FileNotFoundError:
-            pass
-    key.Close()
+def button(parent, text, command):
+    ttk.Button(parent, text=text, command=command).pack(side="left", padx=4)
 
 
-def first_run(config):
-    """Анх нээхэд: нэр, админы компьютер, зөвшөөрөл. Зөвшөөрөхгүй бол програм ажиллахгүй."""
-    window = tk.Tk()
-    window.title("Ажлын бүтээмж — бүртгүүлэх")
-    name = tk.StringVar()
-    server = tk.StringVar(value=config["server"])
-    autostart = tk.BooleanVar(value=True)
-    agree = tk.BooleanVar()
-    ttk.Label(window, text=NOTICE, wraplength=380).grid(row=0, column=0, columnspan=2, padx=10, pady=10)
-    ttk.Label(window, text="Таны нэр:").grid(row=1, column=0, sticky="w", padx=10)
-    ttk.Entry(window, textvariable=name, width=30).grid(row=1, column=1, padx=10, pady=3)
-    ttk.Label(window, text="Админы компьютер:").grid(row=2, column=0, sticky="w", padx=10)
-    ttk.Entry(window, textvariable=server, width=30).grid(row=2, column=1, padx=10, pady=3)
-    ttk.Checkbutton(window, text="Компьютер асахад автоматаар эхлэх", variable=autostart).grid(
-        row=3, column=0, columnspan=2, sticky="w", padx=10)
-    ttk.Checkbutton(window, text="Дээрхийг уншсан, зөвшөөрч байна", variable=agree).grid(
-        row=4, column=0, columnspan=2, sticky="w", padx=10)
-
-    def start():
-        if not name.get().strip():
-            messagebox.showerror("Алдаа", "Нэрээ бичнэ үү.", parent=window)
-        elif not agree.get():
-            messagebox.showerror("Алдаа", "Зөвшөөрөөгүй бол програм ажиллахгүй.", parent=window)
-        else:
-            config["name"] = name.get().strip()
-            config["server"] = server.get().strip() or "127.0.0.1"
-            config["autostart"] = autostart.get()
-            config["consent"] = True
-            reg.save_config(config)
-            window.destroy()
-
-    ttk.Button(window, text="Эхлэх", command=start).grid(row=5, column=0, columnspan=2, pady=10)
-    window.mainloop()
-    return config["consent"]
+def entry(parent, text, width):
+    ttk.Label(parent, text=text).pack(side="left")
+    field = ttk.Entry(parent, width=width)
+    field.pack(side="left", padx=4)
+    return field
 
 
-def admin_setup(config):
-    """--admin: энэ компьютер сервер ажиллуулж, нууц үгтэй самбартай болно."""
-    root = tk.Tk()
-    root.withdraw()
-    password = simpledialog.askstring("Админ", "Самбарын нууц үг:", show="*", parent=root)
-    if password:
-        config["admin"] = True
-        config["password"] = reg.hash_password(password)
-        reg.save_config(config)
-        messagebox.showinfo("Админ", f"Боллоо. Ажилтнууд \"Админы компьютер\" талбарт {socket.gethostname()} "
-                                     "гэж бичнэ. Windows firewall асуувал Allow дарна уу.", parent=root)
-    root.destroy()
-
-
-def dot(color):
-    """Tray-д харуулах өнгөт дугуй зураг."""
-    image = Image.new("RGBA", (64, 64))
-    ImageDraw.Draw(image).ellipse((6, 6, 58, 58), fill=color)
-    return image
-
-
-def make_table(tabs, title, columns):
-    """Notebook-д шинэ таб нэмээд түүн дотор хүснэгт (Treeview) үүсгэнэ."""
-    frame = ttk.Frame(tabs)
-    tabs.add(frame, text=title)
-    table = ttk.Treeview(frame, columns=columns, show="headings")
-    for column in columns:
-        table.heading(column, text=column)
-        table.column(column, width=100)
-    table.pack(fill="both", expand=True)
-    return table
-
-
-# ------------------------------------------------------------------ ажилтны цонх
-class App(tk.Tk):
-    def __init__(self, config, background):
+class ProductivityApp(tk.Tk):
+    def __init__(self):
         super().__init__()
-        self.config_data = config
-        self.title("Ажлын бүтээмж")
-        self.geometry("520x620")
-        self.protocol("WM_DELETE_WINDOW", self.withdraw)          # ✕ дарвал tray руу нуугдана
+        self.title("Ажилтны бүтээмж")
+        self.geometry("900x640")
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.employees = []            # register.py-ээс уншсан ажилтнууд
+        self.camera_service = None
+        self.camera_job = None
+        self.tracker = None            # идэвх хэмжиж байгаа үед ActivityTracker
+        self.summaries = {}            # ажилтны id → идэвхийн хураангуй
 
-        # Бусад гишүүдийн модулиудыг холбох
-        self.clock = prod.Clock()                                  # 5-р гишүүн
-        self.settings = dict(prod.DEFAULT_SETTINGS, **config["settings"])
-        self.camera = CameraService(config["camera_index"])        # 3-р гишүүн
-        self.camera.start()
-        today = reg.load_day(self.clock.now().date().isoformat())  # 2-р гишүүн
-        self.tracker = ActivityTracker(self.camera, self.clock, today, self.settings)   # 4-р гишүүн
-        self.server = reg.start_server(self.clock) if config["admin"] else None
-        self.connected = None                                      # админы компьютертэй холбогдсон уу
-        self.seconds = 0
-        self.tray_color = "green"
-
-        self.build()
-        self.tray = pystray.Icon("ProductivitySystem", dot("green"), "Ажлын бүтээмж", pystray.Menu(
-            pystray.MenuItem("Нээх", self.from_tray(self.show), default=True),
-            pystray.MenuItem("Зогсоох / Үргэлжлүүлэх", self.from_tray(self.toggle_pause)),
-            pystray.MenuItem("Програмыг хаах", self.from_tray(self.quit_app))))
-        self.tray.run_detached()
-        if background:
-            self.withdraw()
-        self.after(1000, self.loop)
-        self.after(200, self.show_frame)
-
-    def build(self):
-        ttk.Label(self, text=self.config_data["name"], font=("Segoe UI", 14, "bold")).pack(pady=8)
-        self.status = tk.Label(self, font=("Segoe UI", 12, "bold"), fg="white", width=20)
-        self.status.pack()
-        self.info = ttk.Label(self, justify="center")
-        self.info.pack(pady=6)
-        self.apps = ttk.Treeview(self, columns=("time", "app"), show="headings", height=8)
-        self.apps.heading("time", text="Хугацаа")
-        self.apps.heading("app", text="Апп / сайт (өнөөдөр)")
-        self.apps.column("time", width=80)
-        self.apps.pack(fill="both", expand=True, padx=10)
-        buttons = ttk.Frame(self)
-        buttons.pack(pady=6)
-        self.pause_button = ttk.Button(buttons, text="Зогсоох", command=self.toggle_pause)
-        self.pause_button.pack(side="left", padx=3)
-        ttk.Button(buttons, text="Камер харах", command=self.toggle_preview).pack(side="left", padx=3)
-        if self.config_data["admin"]:
-            ttk.Button(buttons, text="Самбар", command=self.open_dashboard).pack(side="left", padx=3)
-        tk.Button(buttons, text="Програмаас гарах", bg="red", fg="white", command=self.quit_app).pack(
-            side="left", padx=3)
-        self.video = ttk.Label(self, compound="top")
-        self.video.pack()
-        ttk.Label(self, text=NOTICE, wraplength=480, foreground="gray").pack(pady=6)
-
-    def from_tray(self, function):
-        """Tray өөр thread-д ажилладаг тул функцийг цонхны thread дээр дуудна."""
-        return lambda: self.after(0, function)
-
-    def state(self):
-        return "paused" if self.tracker.paused else self.tracker.status
-
-    # -------------------------------------------------------------- секунд тутам
-    def loop(self):
-        self.after(1000, self.loop)
-        today = self.clock.now().date().isoformat()
-        if today != self.tracker.day["date"]:                      # шөнө дунд — шинэ өдөр
-            reg.save_day(self.tracker.day)
-            self.tracker.new_day(reg.load_day(today))
-        old_state = self.state()
-        self.tracker.tick()
-        self.show_state()
-        self.seconds += 1
-        if self.seconds % 30 == 0:                                 # 30 сек тутам хадгална
-            reg.save_day(self.tracker.day)
-        if self.seconds % 60 == 1 or self.state() != old_state:    # минут тутам, төлөв солигдоход илгээнэ
-            self.send()
-
-    def show_state(self):
-        tracker = self.tracker
-        state = self.state()
-        self.status.config(text=prod.STATUS_TEXT[state], bg=COLORS[state])
-        server = {None: "...", True: "холбогдсон", False: "холбогдоогүй"}[self.connected]
-        self.info.config(text=f"Ажилласан: {prod.fmt(tracker.day['work'])}     "
-                              f"Гарсан: {prod.fmt(tracker.day['away'])}\n"
-                              f"Одоогийн апп: {tracker.app or '—'}\n"
-                              f"Камер: {CAMERA_TEXT[self.camera.state]}     Админ руу: {server}")
-        self.apps.delete(*self.apps.get_children())
-        for app, seconds in sorted(tracker.day["apps"].items(), key=lambda item: -item[1]):
-            self.apps.insert("", "end", values=(prod.fmt(seconds), app))
-        self.pause_button.config(text="Үргэлжлүүлэх" if tracker.paused else "Зогсоох")
-        if COLORS[state] != self.tray_color:                       # tray дүрсний өнгө
-            self.tray_color = COLORS[state]
-            self.tray.icon = dot(self.tray_color)
-
-    # -------------------------------------------------------------- админ руу илгээх
-    def send(self, offline=False):
-        """Өнөөдрийн бүртгэлийг админы компьютер руу илгээнэ (арын thread-д — цонх гацахгүй)."""
-        live = {"status": "offline" if offline else self.state(), "app": self.tracker.app}
-        data = {"uid": reg.make_uid(), "name": self.config_data["name"], "day": self.tracker.day, "live": live}
-        text = json.dumps(data, ensure_ascii=False)                # яг одоогийн хуулбар
-        if offline:
-            reg.push(self.config_data["server"], text)
-        else:
-            threading.Thread(target=self.send_thread, args=(text,), daemon=True).start()
-
-    def send_thread(self, text):
-        answer = reg.push(self.config_data["server"], text)
-        try:
-            self.after(0, self.got_answer, answer)
-        except RuntimeError:                                       # цонх аль хэдийн хаагдсан
-            pass
-
-    def got_answer(self, answer):
-        self.connected = answer is not None
-        if answer and "settings" in answer:
-            self.clock.sync(answer["time"])                        # админы цаг = зөв цаг
-            self.settings.update(answer["settings"])               # админы тохиргоо
-            if self.config_data["settings"] != answer["settings"]:
-                self.config_data["settings"] = answer["settings"]
-                reg.save_config(self.config_data)
-
-    # -------------------------------------------------------------- товчнууд
-    def toggle_pause(self):
-        self.tracker.set_paused(not self.tracker.paused)
-        self.show_state()
-        self.send()
-
-    def toggle_preview(self):
-        self.camera.preview = not self.camera.preview
-        if not self.camera.preview:
-            self.video.config(image="", text="")
-
-    def show_frame(self):
-        """«Камер харах» асаалттай үед 0.2 сек тутам камерын дүрсийг харуулна."""
-        self.after(200, self.show_frame)
-        result = self.camera.get_frame()
-        if self.camera.preview and result:
-            frame, faces = result
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)                  # OpenCV BGR → RGB
-            self.photo = ImageTk.PhotoImage(Image.fromarray(rgb).resize((320, 240)))
-            self.video.config(image=self.photo, text=f"Нүүр: {faces}")    # self.photo — устахгүйн тулд
-
-    def open_dashboard(self):
-        password = simpledialog.askstring("Самбар", "Админ нууц үг:", show="*", parent=self)
-        if password is None:
-            return
-        if reg.hash_password(password) != self.config_data["password"]:
-            messagebox.showerror("Самбар", "Нууц үг буруу.", parent=self)
-            return
-        Dashboard(self)
-
-    def show(self):
-        self.deiconify()
-        self.lift()
-
-    def quit_app(self):
-        if not messagebox.askyesno("Гарах", "Програмыг бүрэн хаах уу? Цаг бүртгэхгүй болно.", parent=self):
-            return
-        reg.save_day(self.tracker.day)
-        self.send(offline=True)                                    # самбарт "Офлайн" болно
-        self.camera.stop()
-        self.tray.stop()
-        if self.server:
-            self.server.shutdown()
-        self.destroy()
-
-
-# ------------------------------------------------------------------ админы самбар
-class Dashboard(tk.Toplevel):
-    """Ажилтнууд, 7 хоног, Хэрэглэгчид, Тохиргоо. 5 секунд тутам шинэчилнэ."""
-
-    def __init__(self, app):
-        super().__init__(app)
-        self.app = app
-        self.title("Самбар (админ)")
-        self.geometry("1200x600")
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
-        self.job = None
-        self.rows = []
-
-        top = ttk.Frame(self)
-        top.pack(fill="x", padx=8, pady=6)
-        ttk.Label(top, text="Өдөр:").pack(side="left")
-        today = app.clock.now().date()
-        self.day = ttk.Combobox(top, state="readonly", width=12,
-                                values=[(today - timedelta(days=i)).isoformat() for i in range(30)])
-        self.day.current(0)
-        self.day.bind("<<ComboboxSelected>>", self.refresh)
-        self.day.pack(side="left", padx=4)
-        ttk.Button(top, text="CSV хадгалах", command=self.save_csv).pack(side="left")
-        ttk.Label(top, text="  Мөр дээр давхар дарвал дэлгэрэнгүй", foreground="gray").pack(side="left")
+        top = row(self)
+        top.pack_configure(padx=10, pady=8)
+        ttk.Label(top, text="Ажилтан:").pack(side="left")
+        self.emp_combo = ttk.Combobox(top, state="readonly", width=30)
+        self.emp_combo.pack(side="left", padx=6)
 
         tabs = ttk.Notebook(self)
-        tabs.pack(fill="both", expand=True, padx=8, pady=4)
-        self.people = make_table(tabs, "Ажилтнууд", prod.COLUMNS)
-        self.people.bind("<Double-1>", self.show_detail)
-        self.week = make_table(tabs, "7 хоног", ["Нэр", "0", "1", "2", "3", "4", "5", "6"])
-        self.users = make_table(tabs, "Хэрэглэгчид", ["ID", "Нэр", "Хэлтэс"])
-        self.users.bind("<<TreeviewSelect>>", self.pick_user)
-        self.user_form(self.users.master)
-        self.settings_tab(tabs)
-        self.load_users()
-        self.refresh()
+        tabs.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        for title, build in (("Ажилтны бүртгэл", self.build_employee), ("Камер", self.build_camera),
+                             ("Компьютерийн идэвх", self.build_activity), ("Бүтээмж", self.build_productivity)):
+            frame = ttk.Frame(tabs, padding=10)
+            tabs.add(frame, text=title)
+            build(frame)
 
-    def destroy(self):
-        if self.job:
-            self.after_cancel(self.job)                            # 5 сек тутмын шинэчлэлийг зогсооно
-        super().destroy()
+        self.refresh_employees()
+        self.after(1000, self.tick)
 
-    def refresh(self, event=None):
-        """Хүснэгтүүдийг серверийн JSON файлуудаас дахин уншина."""
-        if self.job:
-            self.after_cancel(self.job)
-        day = self.day.get()
-        settings = reg.load_settings()
-        now, now_ts = self.app.clock.now(), self.app.clock.timestamp()
-        week = prod.week_days(day)
-        for i, d in enumerate(week):
-            self.week.heading(str(i), text=d[5:])
-        self.rows = []
-        self.people.delete(*self.people.get_children())
-        self.week.delete(*self.week.get_children())
-        for uid, user in reg.list_users().items():
-            if user.get("deleted") or user["created"] > day:
-                continue
-            row = prod.person_row(user, reg.load_person_day(uid, day), reg.load_live(uid), settings, day, now, now_ts)
-            self.rows.append(row)
-            self.people.insert("", "end", iid=uid, values=list(row.values()))
-            cells = [prod.week_cell(reg.load_person_day(uid, d), settings, d, now) if d >= user["created"] else ""
-                     for d in week]
-            self.week.insert("", "end", values=[user["name"]] + cells)
-        self.job = self.after(5000, self.refresh)
+    def show_error(self, text):
+        messagebox.showerror("Алдаа", str(text), parent=self)
 
-    def show_detail(self, event):
-        uid = self.people.focus()
-        if not uid:
-            return
-        day = self.day.get()
-        text = prod.report_text(reg.list_users()[uid], reg.load_person_day(uid, day), reg.load_settings(),
-                                day, self.app.clock.now())
-        window = tk.Toplevel(self)
-        window.title("Дэлгэрэнгүй")
-        box = tk.Text(window, width=80, height=30, font=("Consolas", 10))
-        box.pack(fill="both", expand=True)
-        box.insert("1.0", text)
+    def selected_employee(self):
+        index = self.emp_combo.current()
+        return self.employees[index] if index >= 0 else None
 
-    def save_csv(self):
-        path = filedialog.asksaveasfilename(parent=self, defaultextension=".csv", filetypes=[("CSV", "*.csv")],
-                                            initialfile=f"butemj_{self.day.get()}.csv")
-        if path:
-            prod.export_csv(path, self.rows)
-            messagebox.showinfo("CSV", "Хадгаллаа.", parent=self)
+    # ---------------------------------------------------------- 1. Ажилтны бүртгэл
+    def build_employee(self, frame):
+        form = row(frame)
+        self.name_entry = entry(form, "Нэр:", 22)
+        self.target_entry = entry(form, "Төлөвлөсөн даалгавар:", 6)
+        button(form, "Бүртгэх", self.add_employee_ui)
+        button(form, "Жагсаалт шинэчлэх", self.refresh_employees)
+        button(form, "Устгах", self.delete_selected_ui)
+        self.tree = ttk.Treeview(frame, columns=("Нэр", "Төлөвлөсөн", "Дууссан"), show="headings")
+        for column in self.tree["columns"]:
+            self.tree.heading(column, text=column)
+        self.tree.pack(fill="both", expand=True)
 
-    # -------------------------------------------------------------- хэрэглэгчид
-    def user_form(self, frame):
-        form = ttk.Frame(frame)
-        form.pack(fill="x", pady=6)
-        self.user_name = tk.StringVar()
-        self.user_department = tk.StringVar()
-        ttk.Label(form, text="Нэр:").pack(side="left")
-        ttk.Entry(form, textvariable=self.user_name, width=25).pack(side="left", padx=4)
-        ttk.Label(form, text="Хэлтэс:").pack(side="left")
-        ttk.Entry(form, textvariable=self.user_department, width=25).pack(side="left", padx=4)
-        ttk.Button(form, text="Хадгалах", command=self.save_user).pack(side="left", padx=4)
-        ttk.Button(form, text="Устгах", command=self.delete_user).pack(side="left")
-
-    def load_users(self):
-        self.users.delete(*self.users.get_children())
-        for uid, user in reg.list_users().items():
-            if not user.get("deleted"):
-                self.users.insert("", "end", iid=uid, values=(uid, user["name"], user["department"]))
-
-    def pick_user(self, event):
-        user = reg.list_users().get(self.users.focus())
-        if user:
-            self.user_name.set(user["name"])
-            self.user_department.set(user["department"])
-
-    def save_user(self):
-        uid = self.users.focus()
-        if not uid or not self.user_name.get().strip():
-            messagebox.showerror("Алдаа", "Хэрэглэгч сонгоод нэрийг бичнэ үү.", parent=self)
-            return
-        reg.update_user(uid, self.user_name.get().strip(), self.user_department.get().strip())
-        self.load_users()
-        self.refresh()
-
-    def delete_user(self):
-        uid = self.users.focus()
-        if uid and messagebox.askyesno("Устгах", f"{uid}-ийн бүх түүхийг устгах уу?", parent=self):
-            reg.delete_user(uid)
-            self.load_users()
-            self.refresh()
-
-    # -------------------------------------------------------------- тохиргоо
-    def settings_tab(self, tabs):
-        frame = ttk.Frame(tabs, padding=10)
-        tabs.add(frame, text="Тохиргоо")
-        settings = reg.load_settings()
-        self.fields = {}
-        for row, (key, label) in enumerate(SETTING_LABELS.items()):
-            value = settings[key]
-            if isinstance(value, list):
-                value = ", ".join(str(item) for item in value)
-            self.fields[key] = tk.StringVar(value=str(value))
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=2)
-            ttk.Entry(frame, textvariable=self.fields[key], width=60).grid(row=row, column=1, padx=6)
-        ttk.Button(frame, text="Хадгалах", command=self.save_settings).grid(row=len(SETTING_LABELS), column=1,
-                                                                            sticky="w", pady=8)
-
-    def save_settings(self):
+    def add_employee_ui(self):
+        target = self.target_entry.get()
+        if not target.isdigit():
+            return self.show_error("Төлөвлөсөн даалгаврыг тоогоор бичнэ үү.")
         try:
-            settings = prod.parse_settings({key: var.get() for key, var in self.fields.items()})
-        except ValueError:
-            messagebox.showerror("Алдаа", "Цагийг ЦЦ:ММ, тоог бүхэл тоогоор бичнэ үү.", parent=self)
+            reg.add_employee(self.name_entry.get(), int(target))
+        except (ValueError, OSError) as error:
+            return self.show_error(error)
+        self.name_entry.delete(0, "end")
+        self.target_entry.delete(0, "end")
+        self.refresh_employees()
+
+    def refresh_employees(self):
+        self.employees = reg.list_employees()
+        self.tree.delete(*self.tree.get_children())
+        for emp in self.employees:
+            self.tree.insert("", "end", iid=emp["id"], values=(emp["name"], emp["target"], emp["completed"]))
+        self.emp_combo["values"] = [emp["name"] for emp in self.employees]
+        if self.emp_combo.current() < 0:               # сонгосон ажилтан байхгүй бол эхнийхийг сонгоно
+            self.emp_combo.set(self.employees[0]["name"] if self.employees else "")
+
+    def delete_selected_ui(self):
+        employee_id = self.tree.focus()
+        if not employee_id:
+            return self.show_error("Устгах ажилтнаа жагсаалтаас сонгоно уу.")
+        if messagebox.askyesno("Устгах", "Сонгосон ажилтныг устгах уу?", parent=self):
+            reg.delete_employee(employee_id)
+            self.refresh_employees()
+
+    # ---------------------------------------------------------- 2. Камер
+    def build_camera(self, frame):
+        buttons = row(frame)
+        button(buttons, "Камер нээх", self.start_camera)
+        button(buttons, "Камер хаах", self.stop_camera)
+        self.face_label = ttk.Label(frame, text="Камер хаалттай. Зураг хадгалахгүй.")
+        self.face_label.pack()
+        self.video_label = ttk.Label(frame)
+        self.video_label.pack(pady=8)
+
+    def start_camera(self):
+        if self.camera_service:                        # аль хэдийн нээлттэй
             return
-        reg.save_settings(settings)
-        self.app.settings.update(settings)
-        messagebox.showinfo("Тохиргоо", "Хадгаллаа. Ажилтнуудын компьютерт 1 минутын дотор хүчинтэй болно.",
-                            parent=self)
+        self.camera_service = CameraService()
+        if not self.camera_service.start():
+            self.camera_service = None
+            return self.show_error("Камер нээгдсэнгүй. Камер залгаатай, өөр програм ашиглаагүй эсэхийг шалгана уу.")
+        self.render_camera_frame()
 
+    def render_camera_frame(self):
+        result = self.camera_service.get_frame()
+        if result:
+            frame, faces = result
+            frame = cv2.resize(frame, (480, 360))
+            photo = tk.PhotoImage(data=cv2.imencode(".ppm", frame)[1].tobytes())   # OpenCV кадр → Tkinter зураг
+            self.video_label.config(image=photo)
+            self.video_label.image = photo             # устахгүйн тулд хадгална
+            self.face_label.config(text=f"Илэрсэн нүүр: {faces}")
+        self.camera_job = self.after(60, self.render_camera_frame)
 
-def main():
-    config = reg.load_config()
-    if "--admin" in sys.argv:
-        admin_setup(config)
-    lock = single_instance()
-    if lock is None:                                               # аль хэдийн ажиллаж байна
-        if "--background" not in sys.argv:
-            tk.Tk().withdraw()
-            messagebox.showinfo("Ажлын бүтээмж", "Програм аль хэдийн ажиллаж байна (tray дүрсийг дарна уу).")
-        return
-    if not config["consent"] and not first_run(config):
-        return
-    set_autostart(config["autostart"])
-    try:
-        app = App(config, "--background" in sys.argv)
-    except (RuntimeError, OSError) as error:                       # камерын сан буруу, порт эзлэгдсэн г.м.
-        messagebox.showerror("Ажлын бүтээмж", str(error))
-        return
-    app.mainloop()
+    def stop_camera(self):
+        if self.camera_service:
+            self.after_cancel(self.camera_job)
+            self.camera_service.stop()
+            self.camera_service = None
+            self.video_label.config(image="")
+            self.face_label.config(text="Камер хаалттай. Зураг хадгалахгүй.")
+
+    # ---------------------------------------------------------- 3. Компьютерийн идэвх
+    def build_activity(self, frame):
+        ttk.Label(frame, wraplength=700, text="Хэмжилт зөвхөн «Хэмжилт эхлэх» дарсны дараа, зөвшөөрөлтэйгээр "
+                  "эхэлнэ. Урд талын програмын нэр, хугацааг л бүртгэнэ.").pack(anchor="w", pady=(0, 8))
+        buttons = row(frame)
+        button(buttons, "Хэмжилт эхлэх", self.start_activity)
+        button(buttons, "Түр зогсоох", self.pause_activity)
+        button(buttons, "Дуусгах", self.finish_activity)
+        self.activity_label = ttk.Label(frame, text="Хэмжилт эхлээгүй.", font=("Segoe UI", 12))
+        self.activity_label.pack(pady=10)
+
+    def start_activity(self):
+        if self.tracker:                               # түр зогсоосон хэмжилтийг үргэлжлүүлнэ
+            return self.tracker.resume()
+        self.activity_employee = self.selected_employee()
+        if self.activity_employee is None:
+            return self.show_error("Дээрээс ажилтан сонгоно уу.")
+        self.tracker = ActivityTracker()
+        self.tracker.start()
+
+    def pause_activity(self):
+        if self.tracker:
+            self.tracker.pause()
+
+    def finish_activity(self):
+        if not self.tracker:
+            return
+        summary = self.tracker.stop()
+        self.tracker = None
+        self.summaries[self.activity_employee["id"]] = summary
+        reg.save_activity(self.activity_employee["id"], summary)
+        self.activity_label.config(text=f"{self.activity_employee['name']}: {summary['total_seconds']:.0f} сек — хадгаллаа")
+
+    def tick(self):
+        """Секунд тутам идэвхийг хэмжиж харуулна."""
+        self.after(1000, self.tick)
+        if self.tracker:
+            info = self.tracker.tick()
+            self.activity_label.config(text=f"{self.activity_employee['name']}: {info['app'] or '—'} · "
+                                            f"{info['total_seconds']:.0f} сек")
+
+    # ---------------------------------------------------------- 4. Бүтээмж
+    def build_productivity(self, frame):
+        form = row(frame)
+        self.completed_entry = entry(form, "Гүйцэтгэсэн даалгавар:", 6)
+        button(form, "Хувь бодох", self.calculate_ui)
+        self.percent_label = ttk.Label(frame, text="—", font=("Segoe UI", 32, "bold"))
+        self.percent_label.pack(pady=10)
+        self.report_box = tk.Text(frame, height=10)
+        self.report_box.pack(fill="both", expand=True)
+
+    def calculate_ui(self):
+        employee = self.selected_employee()
+        completed = self.completed_entry.get()
+        if employee is None or not completed.isdigit():
+            return self.show_error("Ажилтан сонгоод гүйцэтгэсэн даалгаврыг тоогоор бичнэ үү.")
+        try:
+            employee = reg.update_progress(employee["id"], int(completed))
+            report = prod.build_report(employee, self.summaries.get(employee["id"], {}))
+            reg.save_report(employee["id"], report)
+        except (ValueError, OSError) as error:
+            return self.show_error(error)
+        self.percent_label.config(text=f"{report['completion_rate']}%")
+        self.report_box.delete("1.0", "end")
+        self.report_box.insert("1.0", prod.report_text(report))
+        self.refresh_employees()
+
+    def on_close(self):
+        if messagebox.askokcancel("Гарах", "Програмыг хаах уу?", parent=self):
+            self.finish_activity()                     # хэмжиж байсан бол хадгална
+            self.stop_camera()
+            self.destroy()
 
 
 if __name__ == "__main__":
-    main()
+    ProductivityApp().mainloop()
